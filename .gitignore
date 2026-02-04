@@ -171,3 +171,6 @@ run_ori_4090_batch.sh
 results.csv
 cache/
 local_model/
+
+.pids
+runs/
