@@ -1,4 +1,7 @@
 # EvoMaster
+<p align="center">
+  【<a href="./README.md">English</a> | <a href="./README-zh.md">简体中文</a>】
+</p>
 
 <div align="center">
 
@@ -84,6 +87,126 @@ EvoMaster 是前沿科学智能体 **SciMaster** 背后的驱动引擎。代码�
 * 集成 **[Bohrium Tool Library](https://www.bohrium.com/)**。
 * 原生支持便捷访问托管在 Bohrium 平台上的 **30,000+** 个科学工具和 API。
 
+
+
+## 🏗️ 项目架构
+
+```
+EvoMaster/
+├── evomaster/              # 核心库
+│   ├── agent/              # Agent 组件（Agent, Session, Tools）
+│   ├── core/               # 工作流（Exp, Playground）
+│   ├── env/                # 环境（Docker, Local）
+│   ├── skills/             # 技能系统（Knowledge, Operator）
+│   └── utils/              # 工具（LLM, Types）
+├── playground/             # Playground 实现
+│   ├── minimal/            # 基础单智能体
+│   ├── minimal_kaggle/     # Kaggle 自动化
+│   ├── minimal_multi_agent/# Planning + Coding 多智能体
+│   ├── minimal_skill_task/ # RAG 工作流
+│   └── x_master/           # X-Master 四阶段工作流
+├── configs/                # 配置文件
+└── docs/                   # 文档
+```
+
+## 📚 文档
+
+| 文档 | 描述 |
+|------|------|
+| [架构概述](./docs/zh/architecture.md) | 系统架构和设计 |
+| [Agent 模块](./docs/zh/agent.md) | Agent, Context, Session 接口 |
+| [Core 模块](./docs/zh/core.md) | BaseExp, BasePlayground 接口 |
+| [Tools 模块](./docs/zh/tools.md) | 工具系统和 MCP 集成 |
+| [Skills 模块](./docs/zh/skills.md) | 技能系统接口 |
+| [LLM 模块](./docs/zh/llm.md) | LLM 抽象层 |
+
+## 🎮 Playgrounds
+
+| Playground | 描述 | 文档 |
+|------------|------|------|
+| `minimal` | 基础单智能体 | [README](./playground/minimal/README_CN.md) |
+| `minimal_kaggle` | Kaggle 竞赛自动化 | [README](./playground/minimal_kaggle/README_CN.md) |
+| `minimal_multi_agent` | Planning + Coding 多智能体 | [README](./playground/minimal_multi_agent/README_CN.md) |
+| `minimal_skill_task` | RAG 分析→搜索→总结工作流 | [README](./playground/minimal_skill_task/README_CN.md) |
+| `x_master` | 四阶段并行工作流 | [README](./playground/x_master/README_CN.md) |
+
+## 🚀 快速开始
+
+### 基本使用
+
+### 使用您的 API Key
+
+打开位于 `configs/[playground name]` 的配置文件并填写相应的空白处。例如，如果您想使用 Deepseek-V3.2 运行 `minimal_multi_agent`，请打开 `configs/minimal_kaggle/deepseek-v3.2-example.yaml` 并修改如下内容：
+
+```bash
+  local_sglang:
+    provider: "deepseek"
+    model: "deepseek-v3.2"
+    api_key: "您的API_KEY"
+    base_url: "http://192.168.2.110:18889/v1"
+
+```
+
+如果您的模型 API 支持 OpenAI 格式，也可以使用 `openai` 配置。请记得**同时修改**后续 Agent 的 LLM配置。
+
+```bash
+cd EvoMaster
+python run.py --agent minimal --task "你的任务描述"
+```
+
+### 使用自定义配置
+
+```bash
+python run.py --agent minimal --config configs/minimal/config.yaml --task "你的任务描述"
+```
+
+### 从文件读取任务
+
+```bash
+python run.py --agent minimal --task task.txt
+```
+
+### 交互模式
+
+```bash
+python run.py --agent minimal --interactive
+```
+
+## 📋 示例
+
+### 单智能体（Minimal）
+```bash
+python run.py --agent minimal --config configs/minimal/deepseek-v3.2-example.yaml --task "Discover a pattern: Given sequence 1, 4, 9, 16, 25... find the formula"
+```
+
+### 多智能体系统
+```bash
+python run.py --agent minimal_multi_agent --config configs/minimal_multi_agent/deepseek-v3.2-example.yaml --task "Write a Python program that implements the following features: Read a text file (create a sample file if it doesn't exist). Count the occurrences of each word in the file. Sort the results by frequency in descending order. Save the results to a new file named word_count.txt. Output the top 10 most common words to the terminal."
+```
+
+### X-Master 工作流
+```bash
+python run.py --agent x_master --task "Which condition of Arrhenius's sixth impossibility theorem do critical-level views violate?\n\nAnswer Choices:\nA. Egalitarian Dominance\nB. General Non-Extreme Priority\nC. Non-Elitism\nD. Weak Non-Sadism\nE. Weak Quality Addition"
+```
+
+### Kaggle 自动化
+```bash
+pip install -r playground/minimal_kaggle/requirements.txt
+python run.py --agent minimal_kaggle --config configs/minimal_kaggle/deepseek-v3.2-example.yaml --task playground/minimal_kaggle/data/public/description.md
+```
+
+## 📦 安装
+
+```bash
+# 克隆仓库
+git clone https://github.com/sjtu-sai-agents/EvoMaster.git
+cd EvoMaster
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 在 configs/ 中配置 LLM API 密钥
+```
 ## 🤝 引用
 
 如果你在研究中使用了 EvoMaster 或 SciMaster 系列智能体，欢迎给我们一个 Star 和引用（BibTeX 将在论文正式发布后更新）。
@@ -92,4 +215,3 @@ EvoMaster 是前沿科学智能体 **SciMaster** 背后的驱动引擎。代码�
 
 * **SciMaster 平台:** [https://scimaster.bohrium.com/chat/](https://scimaster.bohrium.com/chat/)
 * **Bohrium 平台:** [https://www.bohrium.com/](https://www.bohrium.com/)
-

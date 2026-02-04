@@ -1,0 +1,159 @@
+# EvoMaster 统一配置文件
+
+# ============================================
+# LLM 配置
+# ============================================
+llm:
+  # OpenAI 配置
+  openai:
+    provider: "openai"
+    model: "gpt-4"
+    api_key: "your-openai-api-key-here"  # 必填
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 300
+    max_retries: 3
+    retry_delay: 1.0
+
+  # Anthropic (Claude) 配置
+  anthropic:
+    provider: "anthropic"
+    model: "claude-3-5-sonnet-20241022"
+    api_key: "your-anthropic-api-key-here"  # 必填
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 300
+    max_retries: 3
+    retry_delay: 1.0
+
+  # 本地 vLLM 配置示例
+  local_vllm:
+    provider: "openai"
+    model: "Qwen/Qwen2.5-7B-Instruct"
+    api_key: "dummy"  # 本地部署可使用占位符
+    base_url: "http://localhost:8000/v1"
+    temperature: 0.7
+    max_tokens: 4096
+    timeout: 300
+    max_retries: 3
+    retry_delay: 1.0
+
+  # 默认使用的 LLM
+  default: "openai"
+
+# ============================================
+# Agent 配置
+# ============================================
+agent:
+  # 基础配置
+  max_turns: 100
+  llm: "openai"  # 使用的 LLM 配置名称
+
+  # 上下文管理配置
+  context:
+    max_tokens: 128000
+    truncation_strategy: "latest_half"  # none, latest_half, sliding_window, summary
+    preserve_system_messages: true
+    preserve_recent_turns: 5
+
+# ============================================
+# Session 配置
+# ============================================
+session:
+  # Docker 会话配置
+  docker:
+    image: "python:3.11-slim"
+    working_dir: "/workspace"
+    memory_limit: "4g"
+    cpu_limit: 2.0
+    network_mode: "bridge"
+    timeout: 300
+    auto_remove: true
+
+  # 本地会话配置（如果实现）
+  local:
+    working_dir: "/tmp/evomaster"
+    timeout: 300
+
+# ============================================
+# Env 配置（环境管理）
+# ============================================
+env:
+  # 集群配置
+  cluster:
+    # Debug 池（CPU 机器，用于代码调试）
+    debug_pool:
+      type: "cpu"
+      max_concurrent: 5
+      resource_limits:
+        cpu: 4
+        memory: "8g"
+
+    # 训练池（GPU 机器，用于长时间实验）
+    train_pool:
+      type: "gpu"
+      max_concurrent: 2
+      resource_limits:
+        gpu: 1
+        cpu: 8
+        memory: "32g"
+
+  # Docker 基础镜像
+  docker:
+    base_image: "evomaster/base:latest"
+    registry: "docker.io"  # 或私有镜像仓库
+    pull_policy: "if_not_present"  # always, if_not_present, never
+
+  # 作业调度配置
+  scheduler:
+    type: "local"  # local, slurm, kubernetes
+    queue_timeout: 3600  # 队列超时时间（秒）
+    retry_failed: true
+    max_retries: 3
+
+# ============================================
+# Skill 配置
+# ============================================
+skill:
+  # Skill 目录
+  skill_dir: "./evomaster/skills"
+
+  # Knowledge Skill 配置
+  knowledge:
+    # 向量检索配置
+    retrieval:
+      enabled: true
+      embedding_model: "text-embedding-ada-002"
+      top_k: 5
+      similarity_threshold: 0.7
+
+  # Operator Skill 配置
+  operator:
+    # Meta info 常驻上下文
+    load_meta_info: true
+    # Full info 按需加载
+    lazy_load_full_info: true
+
+# ============================================
+# 日志配置
+# ============================================
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: null  # 如果设置，则输出到文件
+  console: true
+
+# ============================================
+# 其他配置
+# ============================================
+# 项目根目录（相对路径）
+project_root: "."
+
+# 工作目录
+workspace: "./workspace"
+
+# 实验结果保存目录
+results_dir: "./results"
+
+# 是否启用调试模式
+debug: false

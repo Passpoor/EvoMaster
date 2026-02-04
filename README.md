@@ -1,6 +1,11 @@
 
 # EvoMaster
 
+
+<p align="center">
+  【<a href="./README.md">English</a> | <a href="./README-zh.md">简体中文</a>】
+</p>
+
 <div align="center">
 
 **The Universal Infrastructure for Building Evolving Autonomous Scientific Research Agents.**
@@ -86,6 +91,121 @@ We are committed to open-sourcing EvoMaster and its ecosystem in stages to ensur
 * Native support for easily accessing over **30,000+** scientific tools and APIs hosted on the Bohrium platform.
 
 
+## 🏗️ Project Architecture
+
+```
+EvoMaster/
+├── evomaster/              # Core library
+│   ├── agent/              # Agent components (Agent, Session, Tools)
+│   ├── core/               # Workflow (Exp, Playground)
+│   ├── env/                # Environment (Docker, Local)
+│   ├── skills/             # Skill system (Knowledge, Operator)
+│   └── utils/              # Utilities (LLM, Types)
+├── playground/             # Playground implementations
+│   ├── minimal/            # Basic single-agent
+│   ├── minimal_kaggle/     # Kaggle automation
+│   ├── minimal_multi_agent/# Planning + Coding agents
+│   ├── minimal_skill_task/ # RAG-based workflow
+│   └── x_master/           # X-Master 4-phase workflow
+├── configs/                # Configuration files
+└── docs/                   # Documentation
+```
+
+## 📚 Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Architecture Overview](./docs/architecture.md) | System architecture and design |
+| [Agent Module](./docs/agent.md) | Agent, Context, Session APIs |
+| [Core Module](./docs/core.md) | BaseExp, BasePlayground APIs |
+| [Tools Module](./docs/tools.md) | Tool system and MCP integration |
+| [Skills Module](./docs/skills.md) | Skill system APIs |
+| [LLM Module](./docs/llm.md) | LLM abstraction layer |
+
+## 🎮 Playgrounds
+
+| Playground | Description | Documentation |
+|------------|-------------|---------------|
+| `minimal` | Basic single-agent playground | [README](./playground/minimal/README.md) |
+| `minimal_kaggle` | Kaggle competition automation | [README](./playground/minimal_kaggle/README.md) |
+| `minimal_multi_agent` | Planning + Coding agents | [README](./playground/minimal_multi_agent/README.md) |
+| `minimal_skill_task` | RAG-based Analyze→Search→Summarize | [README](./playground/minimal_skill_task/README.md) |
+| `x_master` | 4-phase parallel workflow | [README](./playground/x_master/README.md) |
+
+## 🚀 Quick Start
+
+### Use your API key
+Open the config file at `configs/[playground name]` and fill in the corresponding blank. For example, if you want to run minimal_multi_agent with Deepseek-V3.2, open `configs/minimal_kaggle/deepseek-v3.2-example.yaml` and modify:
+```bash
+  local_sglang:
+    provider: "deepseek"
+    model: "deepseek-v3.2"
+    api_key: "dummy"
+    base_url: "http://192.168.2.110:18889/v1"
+```
+You can also use the `openai` config if your API supports OpenAI's format. Remember to modify the llm configuration of the following Agent at the same time
+
+### Basic Usage
+
+```bash
+cd EvoMaster
+python run.py --agent minimal --task "Your task description"
+```
+
+### With Custom Config
+
+```bash
+python run.py --agent minimal --config configs/minimal/config.yaml --task "Your task"
+```
+
+### From Task File
+
+```bash
+python run.py --agent minimal --task task.txt
+```
+
+### Interactive Mode
+
+```bash
+python run.py --agent minimal --interactive
+```
+
+## 📋 Examples
+
+### Single Agent (Minimal)
+```bash
+python run.py --agent minimal --config configs/minimal/deepseek-v3.2-example.yaml --task "Discover a pattern: Given sequence 1, 4, 9, 16, 25... find the formula"
+```
+
+### Multi-Agent System
+```bash
+python run.py --agent minimal_multi_agent --config configs/minimal_multi_agent/deepseek-v3.2-example.yaml --task "Write a Python program that implements the following features: Read a text file (create a sample file if it doesn't exist). Count the occurrences of each word in the file. Sort the results by frequency in descending order. Save the results to a new file named word_count.txt. Output the top 10 most common words to the terminal."
+```
+
+### X-Master Workflow
+```bash
+# install environment for example machine learning task
+pip install -r playground/minimal_kaggle/requirements.txt
+python run.py --agent x_master --task "Which condition of Arrhenius's sixth impossibility theorem do critical-level views violate?\n\nAnswer Choices:\nA. Egalitarian Dominance\nB. General Non-Extreme Priority\nC. Non-Elitism\nD. Weak Non-Sadism\nE. Weak Quality Addition"
+```
+
+### Kaggle Automation
+```bash
+python run.py --agent minimal_kaggle --config configs/minimal_kaggle/deepseek-v3.2-example.yaml --task playground/minimal_kaggle/data/public/description.md
+```
+
+## 📦 Installation
+
+```bash
+# Clone repository
+git clone https://github.com/sjtu-sai-agents/EvoMaster.git
+cd EvoMaster
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure LLM API keys in configs/
+```
 
 ## 🤝 Citation
 
@@ -96,5 +216,3 @@ If you use EvoMaster or the SciMaster series agents in your research, please fee
 
 * **SciMaster Platform:** [https://scimaster.bohrium.com/chat/](https://scimaster.bohrium.com/chat/)
 * **Bohrium Platform:** [https://www.bohrium.com/](https://www.bohrium.com/)
-
-

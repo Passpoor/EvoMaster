@@ -1,0 +1,16 @@
+# EvoMaster 核心依赖
+
+# 配置和数据验证
+pydantic
+PyYAML
+
+# LLM API 客户端
+openai
+anthropic
+google-genai
+
+# MCP (Model Context Protocol) - 用于技能系统
+mcp
+
+# viewer
+flask
