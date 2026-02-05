@@ -184,8 +184,8 @@ python run.py --agent minimal_multi_agent --config configs/minimal_multi_agent/d
 
 ### X-Master Workflow
 ```bash
-# install environment for example machine learning task
-pip install -r playground/minimal_kaggle/requirements.txt
+# install environment for mcp_sandbox
+pip install -r playground/x_master/mcp_sandbox/requirements.txt
 python run.py --agent x_master --task "Which condition of Arrhenius's sixth impossibility theorem do critical-level views violate?\n\nAnswer Choices:\nA. Egalitarian Dominance\nB. General Non-Extreme Priority\nC. Non-Elitism\nD. Weak Non-Sadism\nE. Weak Quality Addition"
 ```
 
