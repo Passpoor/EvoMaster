@@ -104,7 +104,7 @@ session:
     #   - null: 不使用 GPU 限制（使用所有可用 GPU）
     #   - "2": 只使用 GPU 2
     #   - ["0", "1"]: 使用 GPU 0 和 1
-    gpu_devices: ["0", "1"]  # 示例：使用 GPU 0, 1, 2
+    gpu_devices: ["0", "1", "2"]  # 示例：使用 GPU 0, 1, 2
     
     # CPU 设备配置（可选）
     # 可选值：
@@ -118,7 +118,11 @@ session:
       # 是否启用并行资源分配
       enabled: true
       # 最大并行数量
-      max_parallel: 2
+      max_parallel: 3
+      # 是否为每个实验创建独立的工作空间（可选，默认 false）
+      # 启用后，每个 exp 会在主工作空间下创建自己的子目录（如 workspace/exp_0/、workspace/exp_1/）
+      # 避免并行实验之间的文件冲突。所有 agent 仍共享同一个 session 和 env。
+      split_workspace_for_exp: true
     # 软链接配置（可选）
     # 将源目录下的所有文件和文件夹软链接到工作空间的指定位置
     # 格式：{源目录路径: 工作空间内的目标路径}

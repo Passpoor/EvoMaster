@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -216,6 +217,18 @@ class LocalEnv(BaseEnv):
                 f"gpu_devices={gpu_devices}, cpu_devices={cpu_devices}"
             )
 
+    def _is_split_workspace_enabled(self) -> bool:
+        """检查是否启用了 split_workspace_for_exp
+        
+        Returns:
+            是否启用了实验独立工作空间
+        """
+        session_config = self.config.session_config
+        parallel_config = getattr(session_config, 'parallel', None)
+        if parallel_config and isinstance(parallel_config, dict):
+            return parallel_config.get('split_workspace_for_exp', False)
+        return False
+
     def setup(self) -> None:
         """初始化本地环境"""
         if self._is_ready:
@@ -229,12 +242,39 @@ class LocalEnv(BaseEnv):
         workspace.mkdir(parents=True, exist_ok=True)
         
         # 创建软链接（如果有配置）
+        # 当 split_workspace_for_exp 启用时，跳过主工作空间的软链接创建
+        # 软链接会在每个 exp 独立工作空间中创建（通过 setup_exp_workspace）
+        if not self._is_split_workspace_enabled():
+            session_config = self.config.session_config
+            if hasattr(session_config, 'symlinks') and session_config.symlinks:
+                self._create_symlinks(workspace, session_config.symlinks)
+        else:
+            self.logger.info(
+                "split_workspace_for_exp 已启用，跳过主工作空间的软链接创建，"
+                "将在各 exp 工作空间中单独创建"
+            )
+        
+        self._is_ready = True
+        self.logger.info("Local environment setup complete")
+
+    def setup_exp_workspace(self, exp_workspace_path: str) -> None:
+        """创建实验专属的工作空间目录
+        
+        当 split_workspace_for_exp 启用时，为每个实验创建独立的工作空间子目录，
+        并在其中创建软链接（如果有配置）。
+        
+        Args:
+            exp_workspace_path: 实验工作空间的绝对路径
+        """
+        workspace = Path(exp_workspace_path)
+        workspace.mkdir(parents=True, exist_ok=True)
+        
+        # 在 exp 工作空间中创建软链接
         session_config = self.config.session_config
         if hasattr(session_config, 'symlinks') and session_config.symlinks:
             self._create_symlinks(workspace, session_config.symlinks)
         
-        self._is_ready = True
-        self.logger.info("Local environment setup complete")
+        self.logger.info(f"创建实验独立工作空间: {exp_workspace_path}")
 
     def teardown(self) -> None:
         """清理本地环境资源"""
@@ -440,13 +480,13 @@ class LocalEnv(BaseEnv):
             self.logger.debug(f"Setting CUDA_VISIBLE_DEVICES={gpu_allocation}")
 
         # 构建 CPU 限制命令前缀
-        cpu_prefix = ""
+        # 注意：taskset 无法直接执行 shell 内置命令（如 cd），需要包装在 sh -c 中
         if cpu_allocation is not None and sys.platform != "win32":
-            cpu_prefix = f"taskset -c {cpu_allocation} "
-            self.logger.debug(f"Using CPU prefix: {cpu_prefix}")
-
-        # 组合命令
-        final_command = f"{cpu_prefix}{command}" if cpu_prefix else command
+            # 使用 shlex.quote 来安全地转义命令，然后包装在 sh -c 中
+            final_command = f"taskset -c {cpu_allocation} sh -c {shlex.quote(command)}"
+            self.logger.debug(f"Using CPU prefix with sh -c: taskset -c {cpu_allocation}")
+        else:
+            final_command = command
 
         try:
             result = subprocess.run(

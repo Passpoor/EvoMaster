@@ -72,6 +72,22 @@ class LocalSession(BaseSession):
             并行索引，如果未设置则返回 None
         """
         return getattr(self._thread_local, 'parallel_index', None)
+    
+    def set_workspace_path(self, workspace_path: str | None) -> None:
+        """设置当前线程的工作空间路径（用于 split_workspace_for_exp）
+        
+        Args:
+            workspace_path: 工作空间路径，None 表示使用默认工作空间
+        """
+        self._thread_local.workspace_path = workspace_path
+    
+    def get_workspace_path(self) -> str | None:
+        """获取当前线程的工作空间路径
+        
+        Returns:
+            工作空间路径，如果未设置则返回 None（使用默认工作空间）
+        """
+        return getattr(self._thread_local, 'workspace_path', None)
         
     def open(self) -> None:
         """打开本地会话"""
@@ -133,11 +149,18 @@ class LocalSession(BaseSession):
         if parallel_index is None:
             parallel_index = self.get_parallel_index()
         
-        # 使用 LocalEnv 执行命令
-        result = self._env.local_exec(command, timeout=timeout, parallel_index=parallel_index)
+        # 获取线程本地的工作空间路径（用于 split_workspace_for_exp）
+        workspace_override = self.get_workspace_path()
         
-        # 获取工作目录
-        workspace = self.config.workspace_path
+        # 使用 LocalEnv 执行命令
+        result = self._env.local_exec(
+            command, timeout=timeout,
+            workdir=workspace_override,
+            parallel_index=parallel_index,
+        )
+        
+        # 获取工作目录（优先使用线程本地的工作空间路径）
+        workspace = workspace_override or self.config.workspace_path
         
         # 构建结果
         return {

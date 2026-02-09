@@ -193,16 +193,41 @@ class MultiAgentParallelPlayground(BasePlayground):
             parallel_config = session_config.get("parallel", {})
             parallel_enabled = parallel_config.get("enabled", False)
             
-            # 包装任务函数，设置并行索引
+            # 检查是否启用了 split_workspace_for_exp
+            split_workspace = parallel_config.get("split_workspace_for_exp", False)
+            
+            # 包装任务函数，设置并行索引和独立工作空间
             def wrap_task(task_func, parallel_index):
                 def wrapped():
-                    # 如果启用了并行资源分配，设置 session 的并行索引
-                    if parallel_enabled and self.session is not None:
-                        from evomaster.agent.session.local import LocalSession
-                        if isinstance(self.session, LocalSession):
-                            self.session.set_parallel_index(parallel_index)
-                            self.logger.debug(f"设置并行索引: {parallel_index}")
-                    return task_func()
+                    try:
+                        # 如果启用了并行资源分配，设置 session 的并行索引
+                        if parallel_enabled and self.session is not None:
+                            from evomaster.agent.session.local import LocalSession
+                            if isinstance(self.session, LocalSession):
+                                self.session.set_parallel_index(parallel_index)
+                                self.logger.debug(f"设置并行索引: {parallel_index}")
+                                
+                                # 如果启用了 split_workspace_for_exp，为当前 exp 创建独立工作空间
+                                if split_workspace:
+                                    import os
+                                    main_workspace = self.session.config.workspace_path
+                                    exp_workspace = os.path.join(main_workspace, f"exp_{parallel_index}")
+                                    # 通过 env 创建 exp 工作空间（含软链接）
+                                    self.session._env.setup_exp_workspace(exp_workspace)
+                                    # 设置线程本地的工作空间路径
+                                    self.session.set_workspace_path(exp_workspace)
+                                    self.logger.info(
+                                        f"Exp {parallel_index} 使用独立工作空间: {exp_workspace}"
+                                    )
+                        return task_func()
+                    finally:
+                        # 清理线程本地状态
+                        if parallel_enabled and self.session is not None:
+                            from evomaster.agent.session.local import LocalSession
+                            if isinstance(self.session, LocalSession):
+                                self.session.set_parallel_index(None)
+                                if split_workspace:
+                                    self.session.set_workspace_path(None)
                 return wrapped
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -221,12 +246,6 @@ class MultiAgentParallelPlayground(BasePlayground):
                         self.logger.error(f"Task {index} generated an exception: {exc}")
                         # 将异常对象作为结果返回，避免打断其他任务
                         results[index] = exc
-                    finally:
-                        # 清理并行索引
-                        if parallel_enabled and self.session is not None:
-                            from evomaster.agent.session.local import LocalSession
-                            if isinstance(self.session, LocalSession):
-                                self.session.set_parallel_index(None)
 
             self.logger.info("Parallel execution completed.")
             return results
@@ -245,8 +264,10 @@ class MultiAgentParallelPlayground(BasePlayground):
             self.setup()
             self._setup_trajectory_file(output_file)
             task_description_1 = task_description
-            task_description_2 = "通过python代码读取和打印系统环境变量CUDA_VISIBLE_DEVICES的值以及目前可见的cpu的数量，然后结束。注意，不要尝试修改环境变量，你只能读取和打印。"
-            task_description_3 = "通过python代码读取和打印系统环境变量CUDA_VISIBLE_DEVICES的值以及目前可见的cpu的数量，然后结束。注意，不要尝试修改环境变量，你只能读取和打印。"   
+            task_description_2 = task_description
+            task_description_3 = task_description
+            # task_description_2 = "通过python代码读取和打印系统环境变量CUDA_VISIBLE_DEVICES的值以及目前可见的cpu的数量，然后结束。注意，不要尝试修改环境变量，你只能读取和打印。"
+            # task_description_3 = "通过python代码读取和打印系统环境变量CUDA_VISIBLE_DEVICES的值以及目前可见的cpu的数量，然后结束。注意，不要尝试修改环境变量，你只能读取和打印。"   
             # --- 关键步骤：创建任务列表 ---
             task_descriptions = [task_description_1, task_description_2, task_description_3]
             tasks = []
