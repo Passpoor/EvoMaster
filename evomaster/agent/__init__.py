@@ -25,7 +25,7 @@ from evomaster.utils.types import (
     TaskInstance,
 )
 from .context import ContextManager, ContextConfig, TruncationStrategy
-from .agent import BaseAgent, Agent, AgentConfig
+from .agent import BaseAgent, Agent, AgentConfig, copy_agent
 
 # Session 子模块
 from .session import (
@@ -71,6 +71,7 @@ __all__ = [
     "BaseAgent",
     "Agent",
     "AgentConfig",
+    "copy_agent",
     # Session
     "BaseSession",
     "SessionConfig",

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from pydantic import Field
@@ -33,6 +34,10 @@ class LocalSessionConfig(SessionConfig):
         default=None,
         description="CPU 设备，如 '0-15' 或 [0, 1, 2, 3]，None 表示不使用 CPU 限制"
     )
+    parallel: dict[str, Any] | None = Field(
+        default=None,
+        description="并行执行配置，包含 enabled 和 max_parallel 字段"
+    )
 
 
 class LocalSession(BaseSession):
@@ -41,6 +46,9 @@ class LocalSession(BaseSession):
     在本地直接执行 bash 命令，无需容器。
     内部使用 LocalEnv 来完成底层操作。
     """
+    
+    # 线程本地存储，用于跟踪每个线程的并行索引
+    _thread_local = threading.local()
 
     def __init__(self, config: LocalSessionConfig | None = None):
         super().__init__(config)
@@ -48,6 +56,22 @@ class LocalSession(BaseSession):
         # 创建 LocalEnv 实例
         env_config = LocalEnvConfig(session_config=self.config)
         self._env = LocalEnv(env_config)
+    
+    def set_parallel_index(self, parallel_index: int | None) -> None:
+        """设置当前线程的并行索引
+        
+        Args:
+            parallel_index: 并行索引（从 0 开始），None 表示不使用并行资源分配
+        """
+        self._thread_local.parallel_index = parallel_index
+    
+    def get_parallel_index(self) -> int | None:
+        """获取当前线程的并行索引
+        
+        Returns:
+            并行索引，如果未设置则返回 None
+        """
+        return getattr(self._thread_local, 'parallel_index', None)
         
     def open(self) -> None:
         """打开本地会话"""
@@ -79,10 +103,17 @@ class LocalSession(BaseSession):
         command: str,
         timeout: int | None = None,
         is_input: bool = False,
+        parallel_index: int | None = None,
     ) -> dict[str, Any]:
         """执行 bash 命令
         
         提供本地命令执行能力。
+        
+        Args:
+            command: 要执行的命令
+            timeout: 超时时间（秒）
+            is_input: 是否是向正在运行的进程发送输入（本地不支持）
+            parallel_index: 并行索引（可选，如果未提供则从线程本地存储获取）
         """
         if not self._is_open:
             raise RuntimeError("Session not open")
@@ -98,8 +129,12 @@ class LocalSession(BaseSession):
                 "exit_code": 1,
             }
         
+        # 获取并行索引（优先使用参数，否则从线程本地存储获取）
+        if parallel_index is None:
+            parallel_index = self.get_parallel_index()
+        
         # 使用 LocalEnv 执行命令
-        result = self._env.local_exec(command, timeout=timeout)
+        result = self._env.local_exec(command, timeout=timeout, parallel_index=parallel_index)
         
         # 获取工作目录
         workspace = self.config.workspace_path
