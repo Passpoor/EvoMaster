@@ -266,8 +266,6 @@ class MultiAgentParallelPlayground(BasePlayground):
             task_description_1 = task_description
             task_description_2 = task_description
             task_description_3 = task_description
-            # task_description_2 = "通过python代码读取和打印系统环境变量CUDA_VISIBLE_DEVICES的值以及目前可见的cpu的数量，然后结束。注意，不要尝试修改环境变量，你只能读取和打印。"
-            # task_description_3 = "通过python代码读取和打印系统环境变量CUDA_VISIBLE_DEVICES的值以及目前可见的cpu的数量，然后结束。注意，不要尝试修改环境变量，你只能读取和打印。"   
             # --- 关键步骤：创建任务列表 ---
             task_descriptions = [task_description_1, task_description_2, task_description_3]
             tasks = []
@@ -290,35 +288,4 @@ class MultiAgentParallelPlayground(BasePlayground):
         finally:
             self.cleanup()
 
-    # def run(self, task_description: str, output_file: str | None = None) -> dict:
-    #     """运行工作流（覆盖基类方法）
-
-    #     Args:
-    #         task_description: 任务描述
-    #         output_file: 结果保存文件（可选，如果设置了 run_dir 则自动保存到 trajectories/）
-
-    #     Returns:
-    #         运行结果
-    #     """
-    #     try:
-    #         self.setup()
-
-    #         # 设置轨迹文件路径
-    #         self._setup_trajectory_file(output_file)
-
-    #         # 创建并运行实验
-    #         exp = self._create_exp(exp_index=0)
-
-    #         self.logger.info("Running experiment...")
-    #         # 如果有 task_id，传递给 exp.run()
-    #         task_id = getattr(self, 'task_id', None)
-    #         if task_id:
-    #             result = exp.run(task_description, task_id=task_id)
-    #         else:
-    #             result = exp.run(task_description)
-
-    #         return result
-
-    #     finally:
-    #         self.cleanup()
 
