@@ -14,7 +14,6 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from evomaster.core import BasePlayground, register_playground
-from evomaster.agent import copy_agent
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -148,14 +147,14 @@ class MultiAgentParallelPlayground(BasePlayground):
             MultiAgentExp 实例
         """
         # 为每个 exp 创建独立的 Agent 副本
-        # 这些副本共享 llm, session, tools, skill_registry 等配置
-        # 但拥有独立的上下文（context_manager, current_dialog, trajectory 等）
-        planning_agent_copy = copy_agent(
+        # 每个 agent 副本拥有独立的 LLM 实例（不共享），避免并行时的冲突
+        # 共享 session, tools, skill_registry 等配置，但拥有独立的上下文
+        planning_agent_copy = self.copy_agent(
             self.planning_agent, 
             new_agent_name=f"planning_exp_{exp_index}"
         ) if self.planning_agent else None
         
-        coding_agent_copy = copy_agent(
+        coding_agent_copy = self.copy_agent(
             self.coding_agent, 
             new_agent_name=f"coding_exp_{exp_index}"
         ) if self.coding_agent else None
@@ -171,84 +170,6 @@ class MultiAgentParallelPlayground(BasePlayground):
             exp.set_run_dir(self.run_dir)
         return exp
 
-    def execute_parallel_tasks(self, tasks: List[Callable], max_workers: int = 3) -> List[Any]:
-            """通用并行任务执行器
-
-            Args:
-                tasks: 这里的每个元素应该是一个可调用的对象。
-                    如果是带参数的函数，请使用 functools.partial 封装。
-                    例如: [partial(exp1.run, task="A"), partial(exp2.run, task="B")]
-                max_workers: 最大并行线程数
-
-            Returns:
-                List[Any]: 按照输入 tasks 的顺序返回结果列表。
-                        如果任务抛出异常，结果列表中对应位置将是该 Exception 对象。
-            """
-            self.logger.info(f"Starting parallel execution of {len(tasks)} tasks with {max_workers} workers.")
-            
-            results = [None] * len(tasks)
-            
-            # 检查是否启用了并行资源分配
-            session_config = self.config.session.get("local", {})
-            parallel_config = session_config.get("parallel", {})
-            parallel_enabled = parallel_config.get("enabled", False)
-            
-            # 检查是否启用了 split_workspace_for_exp
-            split_workspace = parallel_config.get("split_workspace_for_exp", False)
-            
-            # 包装任务函数，设置并行索引和独立工作空间
-            def wrap_task(task_func, parallel_index):
-                def wrapped():
-                    try:
-                        # 如果启用了并行资源分配，设置 session 的并行索引
-                        if parallel_enabled and self.session is not None:
-                            from evomaster.agent.session.local import LocalSession
-                            if isinstance(self.session, LocalSession):
-                                self.session.set_parallel_index(parallel_index)
-                                self.logger.debug(f"设置并行索引: {parallel_index}")
-                                
-                                # 如果启用了 split_workspace_for_exp，为当前 exp 创建独立工作空间
-                                if split_workspace:
-                                    import os
-                                    main_workspace = self.session.config.workspace_path
-                                    exp_workspace = os.path.join(main_workspace, f"exp_{parallel_index}")
-                                    # 通过 env 创建 exp 工作空间（含软链接）
-                                    self.session._env.setup_exp_workspace(exp_workspace)
-                                    # 设置线程本地的工作空间路径
-                                    self.session.set_workspace_path(exp_workspace)
-                                    self.logger.info(
-                                        f"Exp {parallel_index} 使用独立工作空间: {exp_workspace}"
-                                    )
-                        return task_func()
-                    finally:
-                        # 清理线程本地状态
-                        if parallel_enabled and self.session is not None:
-                            from evomaster.agent.session.local import LocalSession
-                            if isinstance(self.session, LocalSession):
-                                self.session.set_parallel_index(None)
-                                if split_workspace:
-                                    self.session.set_workspace_path(None)
-                return wrapped
-            
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # 提交所有任务，建立 future 到 index 的映射，以保证返回顺序
-                wrapped_tasks = [wrap_task(task, i) for i, task in enumerate(tasks)]
-                future_to_index = {executor.submit(wrapped_task): i for i, wrapped_task in enumerate(wrapped_tasks)}
-
-                # 处理完成的任务
-                for future in as_completed(future_to_index):
-                    index = future_to_index[future]
-                    try:
-                        # 获取返回值
-                        result = future.result()
-                        results[index] = result
-                    except Exception as exc:
-                        self.logger.error(f"Task {index} generated an exception: {exc}")
-                        # 将异常对象作为结果返回，避免打断其他任务
-                        results[index] = exc
-
-            self.logger.info("Parallel execution completed.")
-            return results
 
     def run(self, task_description: str, output_file: str | None = None) -> dict:
         """运行工作流（覆盖基类方法）

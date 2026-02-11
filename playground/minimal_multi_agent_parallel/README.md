@@ -1,68 +1,97 @@
-# Multi-Agent Playground
+# Multi-Agent Parallel Playground
 
-A multi-agent playground demonstrating Planning Agent and Coding Agent collaboration.
+A parallel multi-agent playground based on EvoMaster, demonstrating how to run multiple Planning Agent + Coding Agent workflows concurrently using ThreadPoolExecutor.
 
 ## Overview
 
-Multi-Agent Playground showcases how multiple agents can work together to complete complex tasks:
+This playground extends [minimal_multi_agent](../minimal_multi_agent/README.md) with parallel execution capabilities:
 
 - **Planning Agent**: Analyzes the task and creates an execution plan
 - **Coding Agent**: Executes code tasks based on the plan
+- **Parallel Execution**: Multiple experiments run simultaneously via `execute_parallel_tasks()`
+- **Agent Isolation**: Each parallel task uses independent agent copies (via `copy_agent`) with separate LLM instances and context to avoid conflicts
 
-This pattern is useful for tasks that benefit from separation of planning and execution.
-
-## Workflow
+## Architecture
 
 ```
-┌─────────────────┐
-│  Task Input     │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Planning Agent  │  Analyzes task, creates plan
-└────────┬────────┘
-         │ Plan
-         ▼
-┌─────────────────┐
-│  Coding Agent   │  Executes code based on plan
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│    Results      │
-└─────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         Task Input (same task × N)                       │
+└─────────────────────────────────────────────────────────────────────────┘
+                                    │
+        ┌───────────────────────────┼───────────────────────────┐
+        │                           │                           │
+        ▼                           ▼                           ▼
+┌───────────────┐           ┌───────────────┐           ┌───────────────┐
+│  Exp 0        │           │  Exp 1        │           │  Exp 2        │
+│  workspace/   │           │  workspace/   │           │  workspace/   │
+│  exp_0/       │           │  exp_1/       │           │  exp_2/       │
+│               │           │               │           │               │
+│ Planning→Coding│           │ Planning→Coding│           │ Planning→Coding│
+└───────────────┘           └───────────────┘           └───────────────┘
+        │                           │                           │
+        └───────────────────────────┼───────────────────────────┘
+                                    │
+                                    ▼
+                    ┌───────────────────────────────┐
+                    │  ThreadPoolExecutor Results   │
+                    └───────────────────────────────┘
 ```
+
+## Key Implementation Details
+
+### 1. Agent Copy for Parallel Safety
+
+Each parallel experiment gets its own agent copies via `copy_agent()`:
+
+- **Independent LLM instances**: No shared LLM to avoid race conditions
+- **Independent context**: Separate `current_dialog`, `trajectory`, `_step_count`
+- **Shared resources**: Session, tools, skill_registry (read-only)
+
+### 2. Workspace Isolation
+
+When `session.local.parallel.split_workspace_for_exp: true`:
+
+- Each exp uses `workspace/exp_0/`, `workspace/exp_1/`, etc.
+- Prevents file conflicts between parallel runs
+
+### 3. Parallel Task Execution
+
+Uses `BasePlayground.execute_parallel_tasks()`:
+
+- Wraps tasks with parallel index and workspace setup
+- Returns results in original task order
 
 ## Quick Start
 
 ### 1. Configure
 
-Edit `configs/minimal_multi_agent/deepseek-v3.2-example.yaml`:
+Edit `configs/minimal_multi_agent_parallel/deepseek-v3.2-example.yaml`:
 
 ```yaml
-  local_sglang:
-    provider: "deepseek"
-    model: "deepseek-v3.2"
-    api_key: "dummy"  # Use placeholder for local deployment
-    base_url: "http://192.168.2.110:18889/v1"
-    temperature: 0.7
-    max_tokens: 16384
-    timeout: 300  
-    max_retries: 3
-    retry_delay: 1.0
+# Parallel execution settings (required for this playground)
+session:
+  local:
+    parallel:
+      enabled: true
+      max_parallel: 3
+      split_workspace_for_exp: true  # Isolate workspace per exp
 
-  # ... If using OpenAI API format, also modify each agent's LLM configuration, e.g.
-  agents:
-    draft:
-      llm: "local_sglang" # Change to openai if needed
+agents:
+  planning:
+    llm: "local_sglang"
+    # ...
+  coding:
+    llm: "local_sglang"
+    # ...
 ```
 
 ### 2. Run
 
 ```bash
-# Run with task description
-python run.py --agent minimal_multi_agent --config configs/minimal_multi_agent/deepseek-v3.2-example.yaml --task "Write a Python program that implements the following features: Read a text file (create a sample file if it doesn't exist). Count the occurrences of each word in the file. Sort the results by frequency in descending order. Save the results to a new file named word_count.txt. Output the top 10 most common words to the terminal."
+# Run with parallel multi-agent (uses same task × max_parallel experiments)
+python run.py --agent minimal_multi_agent_parallel \
+  --config configs/minimal_multi_agent_parallel/deepseek-v3.2-example.yaml \
+  --task "Write a Python program that implements the following features: Read a text file (create a sample file if it doesn't exist). Count the occurrences of each word in the file. Sort the results by frequency in descending order. Save the results to a new file named word_count.txt. Output the top 10 most common words to the terminal."
 ```
 
 ### 3. View Results
@@ -70,10 +99,13 @@ python run.py --agent minimal_multi_agent --config configs/minimal_multi_agent/d
 Results are saved in:
 
 ```
-runs/minimal_multi_agent_{timestamp}/
-├── trajectories/       # Agent execution trajectories
-├── logs/              # Execution logs
-└── workspace/         # Generated files
+runs/minimal_multi_agent_parallel_{timestamp}/
+├── trajectories/       # Agent execution trajectories (per exp)
+├── logs/               # Execution logs
+└── workspace/          # Workspaces
+    ├── exp_0/          # Experiment 0 workspace
+    ├── exp_1/          # Experiment 1 workspace
+    └── exp_2/          # Experiment 2 workspace
 ```
 
 ## Configuration Options
@@ -84,53 +116,39 @@ runs/minimal_multi_agent_{timestamp}/
 | `agents.planning.enable_tools` | Enable planning tools | `false` |
 | `agents.coding.max_turns` | Max coding turns | `50` |
 | `agents.coding.enable_tools` | Enable coding tools | `true` |
+| `session.local.parallel.enabled` | Enable parallel execution | `true` |
+| `session.local.parallel.max_parallel` | Max parallel workers | `3` |
+| `session.local.parallel.split_workspace_for_exp` | Isolate workspace per exp | `true` |
 | `skills.enabled` | Enable skill system | `false` |
-
-## Usage Examples
-
-### Write Code
-```bash
-python run.py --agent minimal_multi_agent --config configs/minimal_multi_agent/deepseek-v3.2-example.yaml --task "Write a Python program that implements the following features: Read a text file (create a sample file if it doesn't exist). Count the occurrences of each word in the file. Sort the results by frequency in descending order. Save the results to a new file named word_count.txt. Output the top 10 most common words to the terminal."
-```
 
 ## Directory Structure
 
 ```
-playground/minimal_multi_agent/
+playground/minimal_multi_agent_parallel/
 ├── core/
 │   ├── __init__.py
-│   ├── playground.py    # Main playground
-│   └── exp.py           # Multi-agent experiment
+│   ├── playground.py    # MultiAgentParallelPlayground (parallel workflow)
+│   └── exp.py           # MultiAgentExp (planning → coding)
 ├── prompts/
 │   ├── planning_system_prompt.txt
 │   ├── planning_user_prompt.txt
 │   ├── coding_system_prompt.txt
-│   └── coding_user_prompt.txt           # Working directory
+│   ├── coding_user_prompt.txt
+│   └── system_prompt.txt
+├── README.md
+└── README_CN.md
 ```
 
-## Customization
+## Code Flow
 
-### Adding More Agents
-
-To add more agents, update the config:
-
-```yaml
-agents:
-  planning:
-    # ...
-  coding:
-    # ...
-  review:  # New agent
-    llm: "openai"
-    max_turns: 10
-    enable_tools: false
-    system_prompt_file: "prompts/review_system_prompt.txt"
-```
-
-Then modify `playground.py` and `exp.py` to include the new agent in the workflow.
+1. **`setup()`**: Creates shared Planning Agent and Coding Agent
+2. **`_create_exp(i)`**: Creates `MultiAgentExp` with `copy_agent()` copies for exp index `i`
+3. **`run()`**: Builds task list with `partial(exp.run, task_description=...)`, then calls `execute_parallel_tasks(tasks, max_workers)`
+4. **`execute_parallel_tasks`** (base class): Wraps each task with `set_parallel_index` and `setup_exp_workspace`, runs via `ThreadPoolExecutor`
 
 ## Related
 
 - [EvoMaster Main README](../../README.md)
+- [Minimal Multi-Agent Playground](../minimal_multi_agent/README.md) (sequential version)
 - [Minimal Playground](../minimal/README.md)
 - [Configuration Examples](../../configs/)
