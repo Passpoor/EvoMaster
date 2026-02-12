@@ -11,10 +11,15 @@ from typing import Any
 from .uct import MetricReview, UCTSearchManager
 
 
-def copy_submission(submission_dir: Path, node_id: str) -> Path | None:
+def copy_submission(
+    submission_dir: Path,
+    node_id: str,
+    source_submission_dir: Path | None = None,
+) -> Path | None:
     """Copy submission.csv to a node-specific file if it exists."""
     submission_dir.mkdir(parents=True, exist_ok=True)
-    src = submission_dir / "submission.csv"
+    src_dir = source_submission_dir or submission_dir
+    src = src_dir / "submission.csv"
     if not src.exists():
         return None
     dst = submission_dir / f"submission_{node_id}.csv"

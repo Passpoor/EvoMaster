@@ -1,8 +1,7 @@
 # ML-Master 配置文件
-# 基于 minimal_kaggle 模板，保留 ml_master 特有配置
 
 # ============================================
-# 实验特定配置 (ml_master 特有)
+# 实验特定配置
 # ============================================
 exp_id: "detecting-insults-in-social-commentary"
 data_root: "/data/public_data/exp_data/demo1bench"   # 本地数据根目录
@@ -11,36 +10,22 @@ data_root: "/data/public_data/exp_data/demo1bench"   # 本地数据根目录
 # LLM 配置
 # ============================================
 llm:
-  # OpenAI 兼容接口
   openai:
     provider: "openai"
-    model: "deepseek/deepseek-v3.2"
-    api_key: "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"
-    base_url: "https://openrouter.ai/api/v1"
-    temperature: 0.7
-    max_tokens: 32000
-    timeout: 600
-    max_retries: 3
-    retry_delay: 1.0
-
-  # Anthropic 兼容接口
-  anthropic:
-    provider: "anthropic"
-    model: "claude-haiku-4-5-20251001"
-    api_key: "sk-5LbA2T3ixhf09JpXzzvpQchzCDK6Di9Eh5txc6sGOfas9Spj"
-    base_url: "http://123.129.219.111:3000"
+    model: "${GPT_CHAT_MODEL}"
+    api_key: "${OPENAI_API_KEY}"
+    base_url: "${GPT_BASE_URL}"
     temperature: 0.7
     max_tokens: 16384
     timeout: 60
     max_retries: 3
     retry_delay: 1.0
 
-  # OpenRouter
-  openrouter:
-    provider: "openrouter"
-    model: "qwen/qwen3-235b-a22b-2507"
-    api_key: "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"
-    base_url: "https://openrouter.ai/api/v1"
+  anthropic:
+    provider: "anthropic"
+    model: "claude-haiku-4-5-20251001"
+    api_key: "${ANTHROPIC_API_KEY}"
+    base_url: "${ANTHROPIC_BASE_URL}"
     temperature: 0.7
     max_tokens: 16384
     timeout: 60
@@ -51,15 +36,16 @@ llm:
   local_sglang:
     provider: "deepseek"
     model: "deepseek-v3.2"
-    api_key: "dummy"
-    base_url: "http://127.0.0.1:18889/v1"
+    api_key: "${DEEPSEEK_API_KEY}"  # 本地部署可使用占位符
+    base_url: "${DEEPSEEK_API_BASE}"
     temperature: 0.7
     max_tokens: 16384
-    timeout: 300
+    timeout: 300  
     max_retries: 3
     retry_delay: 1.0
 
   default: "local_sglang"
+
 
 # ============================================
 # 多智能体配置
@@ -157,7 +143,7 @@ session:
     #   - null: 不使用 GPU 限制（使用所有可用 GPU）
     #   - "2": 只使用 GPU 2
     #   - ["0", "1"]: 使用 GPU 0 和 1
-    gpu_devices: null  # 示例：使用 GPU 2
+    gpu_devices: ["0,1", "2,3", "4,5", "6,7"]  # 8卡机器上4并行，每个任务2卡
     
     # CPU 设备配置（可选）
     # 可选值：
@@ -165,6 +151,11 @@ session:
     #   - "0-15": 使用 CPU 0 到 15
     #   - [0, 1, 2, 3]: 使用 CPU 0, 1, 2, 3
     cpu_devices: null  # 示例：使用 CPU 0-15
+
+    parallel:
+      enabled: true
+      max_parallel: 4
+      split_workspace_for_exp: true
     
     # 软链接配置（ml_master 特有）
     symlinks:
