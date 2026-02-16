@@ -71,8 +71,8 @@ class XMasterPlayground(BasePlayground):
         self.logger.info("Setting up X-Master playground...")
         
         # 1. 准备 LLM 配置
-        llm_config_dict = self._setup_llm_config()
-        self._llm_config_dict = llm_config_dict
+        llm_config = self._setup_llm_config()
+        self._llm_config = llm_config
         
         # 2. 创建 Session（所有Agent共享）
         self._setup_session()
@@ -84,7 +84,7 @@ class XMasterPlayground(BasePlayground):
         self._load_workflow_config()
 
         # 5. 创建四个组件的Agent
-        self._setup_agents(llm_config_dict)
+        self._setup_agents(llm_config)
 
 
         self.logger.info("X-Master playground setup complete")
@@ -104,11 +104,11 @@ class XMasterPlayground(BasePlayground):
 
         self.logger.info(f"Workflow config: agent_num={self.agent_num}, max_workers={self.max_workers}")
     
-    def _setup_agents(self, llm_config_dict: Dict[str, Any]) -> None:
+    def _setup_agents(self, llm_config: Dict[str, Any]) -> None:
         """创建四个组件的Agent
         
         Args:
-            llm_config_dict: LLM配置字典
+            llm_config: LLM配置字典
         """
         agents_config = getattr(self.config, 'agents', {})
         if not agents_config:
@@ -124,7 +124,7 @@ class XMasterPlayground(BasePlayground):
                 name="Solver",
                 agent_config=solver_config,
                 enable_tools=solver_config.get('enable_tools', False),
-                llm_config_dict=llm_config_dict,
+                llm_config=llm_config,
             )
             self.logger.info("Solver Agent created")
 
@@ -135,7 +135,7 @@ class XMasterPlayground(BasePlayground):
                 name="Critic",
                 agent_config=critic_config,
                 enable_tools=critic_config.get('enable_tools', False),
-                llm_config_dict=llm_config_dict,
+                llm_config=llm_config,
             )
         self.logger.info("Critic Agent created")
         
@@ -146,7 +146,7 @@ class XMasterPlayground(BasePlayground):
                 name="Rewriter",
                 agent_config=rewriter_config,
                 enable_tools=rewriter_config.get('enable_tools', False),
-                llm_config_dict=llm_config_dict,
+                llm_config=llm_config,
             )
         self.logger.info("Rewriter Agent created")
         
@@ -157,7 +157,7 @@ class XMasterPlayground(BasePlayground):
                 name="Selector",
                 agent_config=selector_config,
                 enable_tools=selector_config.get('enable_tools', False),
-                llm_config_dict=llm_config_dict,
+                llm_config=llm_config,
             )
             self.logger.info("Selector Agent created")
 
