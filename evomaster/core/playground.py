@@ -870,12 +870,13 @@ class BasePlayground:
         
         return trajectory_file
 
-    def run(self, task_description: str, output_file: str | None = None) -> dict:
+    def run(self, task_description: str, output_file: str | None = None, images: list[str] | None = None) -> dict:
         """运行工作流
 
         Args:
             task_description: 任务描述
             output_file: 结果保存文件（可选，如果设置了 run_dir 则自动保存到 trajectories/）
+            images: 图片文件路径列表（可选，用于多模态任务）
 
         Returns:
             运行结果
@@ -890,7 +891,7 @@ class BasePlayground:
             exp = self._create_exp()
 
             self.logger.info("Running experiment...")
-            result = exp.run(task_description)
+            result = exp.run(task_description, images=images)
 
             return result
 

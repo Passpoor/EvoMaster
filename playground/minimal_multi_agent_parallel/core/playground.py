@@ -54,10 +54,7 @@ class MultiAgentParallelPlayground(BasePlayground):
         super().__init__(config_dir=config_dir, config_path=config_path)
         self.logger = logging.getLogger(self.__class__.__name__)
         self.agents.declare("planning_agent", "coding_agent")
-        # # 存储多个Agent
-        # self.planning_agent = None
-        # self.coding_agent = None
-        
+
         # 从配置中读取并行配置
         session_config = self.config.session.get("local", {})
         parallel_config = session_config.get("parallel", {})

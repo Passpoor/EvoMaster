@@ -30,12 +30,6 @@ class MinimalKagglePlayground(BasePlayground):
         super().__init__(config_dir=config_dir, config_path=config_path)
         self.logger = logging.getLogger(self.__class__.__name__)
         self.agents.declare("draft_agent", "debug_agent", "improve_agent", "reseach_agent", "knowledge_promotion_agent", "metric_agent")
-        # self.draft_agent = None
-        # self.debug_agent = None
-        # self.improve_agent = None
-        # self.reseach_agent = None
-        # self.knowledge_promotion_agent = None
-        # self.metric_agent = None
 
         self.best_score = None
         self.best_solution = None
@@ -53,40 +47,6 @@ class MinimalKagglePlayground(BasePlayground):
         self._setup_agents()
 
         self.logger.info("Minimal kaggle playground setup complete")
-
-    # def setup(self) -> None:
-    #     self.logger.info("Setting up multi-agent playground...")
-
-    #     llm_config = self._setup_llm_config()
-    #     self._llm_config = llm_config 
-
-    #     self._setup_session()
-
-    #     self._setup_tools()
-
-    #     agents_config = getattr(self.config, 'agents', {})
-    #     if not agents_config:
-    #         raise ValueError(
-    #             "No agents configuration found. "
-    #             "Please add 'agents' section to config.yaml"
-    #         )
-                  
-    #     for name in ["draft", "debug", "improve", "reseach", "knowledge_promotion", "metric"]:
-    #         if name not in agents_config:
-    #             raise ValueError(f"缺少 agent 配置: {name}")
-    #         cfg = agents_config[name]
-    #         enable_tools = cfg.get("enable_tools", False)
-    #         agent = self._create_agent(
-    #             name=name,
-    #             agent_config=cfg,
-    #             enable_tools=enable_tools,
-    #             llm_config=llm_config,
-    #         )
-    #         setattr(self, name + "_agent", agent)
-    #         self.logger.info("Agent created: %s", name)
-
-
-    #     self.logger.info("Minimal Kaggle Playground setup complete")
 
     def compare_score(self, old_score, new_score):
         if old_score is None or new_score is None:
