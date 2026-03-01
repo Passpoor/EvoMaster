@@ -1,7 +1,5 @@
-# EvoMaster v0.0.2 版本更新说明
+# EvoMaster v0.0.2 版本更新说明及快速迁移指南
 
-> 对比基线：`main` 分支 → `xinyu/parallel` 分支
-> 涉及文件：143 个文件，+8968 / -1675 行
 
 ---
 
@@ -11,7 +9,7 @@
 
 旧架构中 `agent`（单数）只能关联一套全局 LLM；新版改为 `agents`（复数），每个 agent 独立声明自己的 LLM、Tools、Skills。
 
-| 维度 | main (旧) | xinyu/parallel (新) |
+| 维度 | v0.0.1 (旧) | v0.0.2 (新) |
 |------|-----------|---------------------|
 | 配置字段 | `agent: {...}` | `agents: { name: {...} }` |
 | LLM 绑定 | 全局 `llm.default` | 每个 agent 可指定 `llm: "openai"` |
@@ -66,18 +64,8 @@
 - `ContextManager` / `SimpleTokenCounter`：适配多模态内容的 token 估算（图片 ~750 tokens）。
 - `run.py`：新增 `--images` 命令行参数。
 
-### 3. 飞书机器人接口
 
-- 新增 `evomaster/interface/feishu/` 模块，包含：
-  - `app.py`：FeishuBot 主类（生命周期管理：初始化 → 事件接收 → 解析 → 去重 → 调度）
-  - `dispatcher.py`：任务调度器（支持 `/agent <name> <task>` 命令）
-  - `sender.py`：消息发送（支持文本/卡片消息，流式更新）
-  - `dedup.py`：消息去重
-  - `event_handler.py`：事件解析
-  - `config.py`：飞书配置
-  - `client.py`：飞书 SDK 客户端创建
-
-### 4. ML-Master Playground
+### 3. ML-Master Playground
 
 - 新增 `playground/ml_master/`：面向机器学习竞赛（如 Kaggle）的完整工作流。
   - 三阶段 Exp：`DraftExp`（初稿）→ `DebugExp`（调试）→ `ImproveExp`（改进）。
@@ -85,13 +73,9 @@
   - 数据预览工具（`core/utils/data_preview.py`）：自动生成数据集概览。
   - 可视化模块（`vis/`）：树形结构 Web 可视化。
 
-### 5. 多 Agent 并行 Playground 示例
+### 4. 多 Agent 并行 Playground 示例
 
 - 新增 `playground/minimal_multi_agent_parallel/`：演示如何使用 `copy_agent()` + `ThreadPoolExecutor` 并行运行多个实验。
-
-### 6. `extract_agent_response()` 模块级工具函数
-
-- `evomaster/core/exp.py`：新增 `extract_agent_response()` 函数，支持从对象或 dict 格式的轨迹中提取 Agent 最终回答（优先提取 `finish` tool_call 的 message 参数）。
 
 ---
 
@@ -103,10 +87,7 @@
 - 全局 `mcp:` 配置 → per-agent `tools.mcp` 配置（保留全局 `mcp:` 作为高级选项）
 - `agent:` → `agents:` (配置文件中的字段名)
 
-### Exp 结果格式变更（x_master）
 
-- 结果从 `Dict[str, Any]`（如 `{"solver_result_0": "..."}`) 变为 `List[Dict]`（如 `[{"exp_index": 0, "solver_result": "..."}]`）。
-- `_extract_solutions_from_results()` 等方法适配新格式。
 
 ### X-Master Playground
 
@@ -116,7 +97,6 @@
 
 ### 依赖变更
 
-- `requirements.txt` 新增飞书 SDK 等依赖。
 - 新增 `.env.template` 模板文件。
 
 ---
@@ -135,15 +115,15 @@
 
 ---
 
-# 从 main 到 xinyu/parallel 的快速迁移指南
+# v0.0.1 到 v0.0.2 快速迁移指南
 
-本指南帮助你将基于 `main` 分支编写的 Playground 迁移到 `xinyu/parallel` 分支的新架构。
+Evomaster v0.0.2版本进一步优化了代码和配置文件，让开发者能适配更多个性化需求和复用更多代码，同时弃用了一些接口，本指南可用于快速迁移到分支的新架构。
 
 ## 第 1 步：迁移配置文件 (config.yaml)
 
 ### 1.1 `agent` → `agents`，每个 agent 声明 LLM
 
-**旧写法 (main):**
+**旧写法 (v0.0.1):**
 ```yaml
 llm:
   openai:
@@ -165,7 +145,7 @@ agents:
     context: ...
 ```
 
-**新写法 (xinyu/parallel):**
+**新写法 (v0.0.2):**
 ```yaml
 llm:
   openai:
@@ -193,28 +173,66 @@ agents:
 
 | 旧 | 新 | 说明 |
 |----|-----|------|
-| `enable_tools: true` | `tools: { builtin: ["*"] }` | 启用全部工具 |
+| `enable_tools: true` | `tools: { builtin: ["*"] }`或`tools: "default"`  | 启用全部bulitin工具 |
 | `enable_tools: false` | `tools: { builtin: [] }` | 禁用全部工具 |
-| 无对应 | `tools: { builtin: ["execute_bash", "finish"] }` | 仅启用指定工具 |
+| 无对应 | `tools: { builtin: ["execute_bash", "finish"], mcp:"mcp_config.json" }` | 仅启用指定工具和指定MCP |
 | 全局 `mcp:` 配置 | `tools: { mcp: "mcp_config.json" }` | per-agent MCP |
 | 不配置 `tools` 键 | 默认 `builtin: ["*"], mcp: ""` | 全部 builtin |
 
 ### 1.3 Skills 配置
 
-**旧写法:** 全局配置
+| 旧 | 新 | 说明 |
+|----|-----|------|
+| 全局 `skills: { enabled: true, skills_root: "..." }` | per-agent `skills: ["rag"]` | 从全局开关改为每个 agent 独立声明所需 skill |
+| `skills.enabled: true` + 所有 agent 共享同一 registry | 每个 agent 的 `skills:` 字段独立 | 不同 agent 可加载不同的 skill 子集 |
+| 无对应 | `skills: "*"` 或 `skills: ["*"]` | 加载全部 skills（等价旧版 `enabled: true`） |
+| 无对应 | `skills: ["rag", "pdf"]` | 仅加载指定名称的 skills |
+| 无对应 | 不配置 `skills` 键 / `skills:` (空值) | 该 agent 不加载任何 skill |
+
+**旧写法:** 全局配置 + 在 Playground 中手动加载
 ```yaml
+# config.yaml
 skills:
   enabled: true
-  skills_root: "evomaster/skills"
+  skills_root: "./evomaster/skills"
+```
+```python
+# playground.py 中手动加载
+config_dict = self.config.model_dump()
+skills_config = config_dict.get("skills", {})
+skill_registry = None
+if skills_config.get("enabled", False):
+    skills_root = Path(skills_config.get("skills_root", "evomaster/skills"))
+    skill_registry = SkillRegistry(skills_root)           # 全量加载，所有 agent 共享
+
+self._setup_tools(skill_registry)                         # 手动传给工具注册
+
+# 每个 agent 创建时也要手动传
+self._create_agent(..., skill_registry=skill_registry)
 ```
 
-**新写法:** per-agent
+**新写法:** per-agent 配置，基类自动处理
 ```yaml
+# config.yaml
 agents:
-  coding:
+  search:
     llm: "openai"
-    skills: ["rag"]        # 仅加载 rag skill
-    # 或 skills: "*"       # 加载全部 skills
+    skills:            # 该 agent 加载全部 skills
+      - "*"
+  summarize:
+    llm: "openai"
+    skills:            # 该 agent 仅加载 rag 和 pdf
+      - "rag"
+      - "pdf"
+  plan:
+    llm: "openai"
+    # 不配置 skills → 不加载任何 skill
+```
+```python
+# playground.py — 无需手动处理 skills
+def setup(self):
+    self._setup_session()
+    self._setup_agents()   # 基类自动按 agent 配置加载各自的 skill_registry
 ```
 
 ## 第 2 步：迁移 Playground 代码
@@ -326,36 +344,6 @@ self.agents.planning_agent.run(task)
 self.agents.coding_agent.run(task)
 ```
 
-### 2.4 Exp 中使用 Agent（并行场景）
-
-**旧写法:** 直接使用共享的 agent 引用
-```python
-def _create_exp(self):
-    exp = MultiAgentExp(
-        planning_agent=self.planning_agent,
-        coding_agent=self.coding_agent,
-    )
-    return exp
-```
-
-**新写法:** 使用 `copy_agent()` 创建独立副本（并行安全）
-```python
-def _create_exp(self, exp_index):
-    planning_copy = self.copy_agent(
-        self.agents.planning_agent,
-        new_agent_name=f"planning_exp_{exp_index}"
-    )
-    coding_copy = self.copy_agent(
-        self.agents.coding_agent,
-        new_agent_name=f"coding_exp_{exp_index}"
-    )
-    exp = MultiAgentExp(
-        planning_agent=planning_copy,
-        coding_agent=coding_copy,
-        exp_index=exp_index
-    )
-    return exp
-```
 
 ## 第 3 步：迁移 Skills 引用
 
@@ -379,34 +367,5 @@ if isinstance(skill, Skill):
     ...
 ```
 
-## 第 4 步：迁移 Exp 结果提取（如适用）
 
-**旧写法:** 结果是 dict，key 含索引
-```python
-results = {"solver_result_0": "...", "solver_result_1": "..."}
-for i in range(self.agent_num):
-    key = f"solver_result_{i}"
-    if key in results:
-        solutions.append(results[key])
-```
 
-**新写法:** 结果是 list，每个元素含 `exp_index`
-```python
-results = [{"exp_index": 0, "solver_result": "..."}, {"exp_index": 1, "solver_result": "..."}]
-for result in results:
-    key = "solver_result"
-    if key in result and result[key] is not None:
-        solutions.append(result[key])
-```
-
-## 迁移检查清单
-
-- [ ] 配置文件：`enable_tools` → `tools: { builtin: [...] }`
-- [ ] 配置文件：确认每个 agent 下有 `llm` 字段
-- [ ] Playground：`self.xxx_agent = None` → `self.agents.declare("xxx_agent")`
-- [ ] Playground：手动 `setup()` → `_setup_session()` + `_setup_agents()`
-- [ ] Playground：`self.xxx_agent` → `self.agents.xxx_agent`
-- [ ] 并行场景：使用 `copy_agent()` 创建独立副本
-- [ ] Skills：`KnowledgeSkill/OperatorSkill` → `Skill`
-- [ ] 移除对 `SkillConfig`、`get_skill_config()` 的引用
-- [ ] 移除对 `_setup_llm_config()` 的调用（已被 per-agent 方法取代）
