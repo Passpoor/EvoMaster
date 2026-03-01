@@ -374,6 +374,10 @@ class BasePlayground:
     ):
         """创建工具注册表并按需初始化 MCP 工具。
 
+        无论 tool_config 中是否启用了某些工具，所有内置工具都会被注册到 registry 中，
+        以便代码中可以手动调用未启用的工具。工具的"启用/禁用"仅影响是否将工具信息
+        暴露给 LLM（通过 enable_tools 和 _get_tool_specs 控制）。
+
         Args:
             skill_config: Skill 配置，内部会按需解析 SkillRegistry
             tool_config: per-agent 工具配置，形如 {"builtin": list[str], "mcp": str}
@@ -382,12 +386,11 @@ class BasePlayground:
         skill_registry = self._resolve_skill_registry(skill_config)
         tool_config = tool_config or {"builtin": ["*"], "mcp": ""}
 
-        builtin_names = tool_config.get("builtin", ["*"])
         mcp_config_file = tool_config.get("mcp", "")
 
-        # 按 builtin 名称创建工具注册表
+        # 始终注册所有内置工具，确保代码中可以手动调用任何工具
         tool_registry = create_registry(
-            builtin_names=builtin_names,
+            builtin_names=["*"],
             skill_registry=skill_registry,
         )
         self.tools = tool_registry
@@ -480,7 +483,11 @@ class BasePlayground:
         mcp_config_file = tool_config.get("mcp", "")
         enable_tools = bool(builtin) or bool(mcp_config_file)
 
-        # 创建工具注册表
+        # 计算启用的工具名称列表（用于过滤暴露给 LLM 的工具）
+        # builtin 为 ["*"] 时表示所有工具都启用，为 [] 时不启用任何工具
+        enabled_tool_names = builtin if builtin else []
+
+        # 创建工具注册表（始终注册所有工具）
         tools = self._setup_tools(
             skill_config=skill_config,
             tool_config=tool_config,
@@ -533,6 +540,7 @@ class BasePlayground:
             output_config=output_config,
             config_dir=self.config_dir,
             enable_tools=enable_tools,
+            enabled_tool_names=enabled_tool_names,
         )
 
         # 设置Agent名称（用于轨迹文件中标识不同的agent）
@@ -588,6 +596,7 @@ class BasePlayground:
             'output_config': agent.output_config.copy() if agent.output_config else None,
             'config_dir': agent.config_dir,
             'enable_tools': agent.enable_tools,
+            'enabled_tool_names': getattr(agent, 'enabled_tool_names', None),
         }
 
         if agent_class.__name__ == 'Agent':
