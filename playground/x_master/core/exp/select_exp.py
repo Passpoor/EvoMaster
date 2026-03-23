@@ -9,7 +9,7 @@ from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_i
 from evomaster import TaskInstance
 from evomaster.agent import BaseAgent
 from evomaster.core.exp import BaseExp
-from .utils import strip_think_and_exec, extract_agent_response
+from .utils import strip_think_and_exec, extract_final_response
 
 
 class SelectExp(BaseExp):
@@ -94,12 +94,12 @@ class SelectExp(BaseExp):
                         results['selector_trajectory'] = selector_trajectory
 
                         # 提取 LLM 的原始回复
-                        selector_response = extract_agent_response(selector_trajectory)
-                        results['selector_response'] = selector_response
+                        selector_response = extract_final_response(selector_trajectory)
+                        results['selector_result'] = selector_response
 
                         # 解析选择结果，返回最终选中的答案
-                        selected_solution = self._parse_selector_choice(selector_response, solutions)
-                        results['selector_result'] = selected_solution
+                        # selected_solution = self._parse_selector_choice(selector_response, solutions)
+                        # results['selector_result'] = selected_solution
                         results['selected_index'] = self._get_selected_index(selector_response, len(solutions))
                         
                         self.logger.info("Selecting completed")
@@ -131,11 +131,11 @@ class SelectExp(BaseExp):
         Reture:
             返回的方案prompt:
             格式：
-            ## Respnse 1
+            ## Response 1
             {solution_1}
-            ## Respnse 2
+            ## Response 2
             {solution_2}
-            ## Respnse 3
+            ## Response 3
             {solution_3}
             ...
             ...

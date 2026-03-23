@@ -25,7 +25,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_DIR="${SCRIPT_DIR}/.pids"
 
-SANDBOX_PORT="${SANDBOX_PORT:-8001}"
+SANDBOX_PORT="${SANDBOX_PORT:-8002}"
 API_PORT="${API_PORT:-1234}"
 LEGACY_PORT="${LEGACY_PORT:-30008}"
 HOST="${HOST:-0.0.0.0}"

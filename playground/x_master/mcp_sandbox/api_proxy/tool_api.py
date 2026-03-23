@@ -45,11 +45,11 @@ async def main():
         # result = await web_search_api(session, "what is google")
         # print(result)
 
-        # result = await read_pdf_api(session, "https://arxiv.org/pdf/2305.14342")
-        # print(result)
-        
-        result = await fetch_web_api(session, "https://www.google.com/")
+        result = await read_pdf_api(session, "https://arxiv.org/pdf/2305.14342")
         print(result)
+        
+        # result = await fetch_web_api(session, "https://www.google.com/")
+        # print(result)
 
 
 if __name__ == "__main__":

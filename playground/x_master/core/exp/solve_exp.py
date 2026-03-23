@@ -79,7 +79,6 @@ class SolveExp(BaseExp):
                     results[f'solver_trajectory'] = solver_trajectory
                     solver_result = extract_agent_response(solver_trajectory)
                     results[f'solver_result'] = solver_result
-                    self.solver.reset_context()
 
                     self.logger.info("Solving completed")
 
