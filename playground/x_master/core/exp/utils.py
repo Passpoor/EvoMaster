@@ -27,6 +27,53 @@ def strip_think_and_exec(text: str) -> str:
     return out.strip()
 
 
+
+def extract_final_response(trajectory: Any) -> str:
+    """从轨迹中提取Agent的最终回答（同时包含content + finish message）"""
+    if not trajectory or not trajectory.dialogs:
+        return ""
+
+    last_dialog = trajectory.dialogs[-1]
+
+    assistant_content = None
+    finish_message = None
+
+    for message in reversed(last_dialog.messages):
+        if not (hasattr(message, "role") and getattr(message.role, "value", message.role) == "assistant"):
+            continue
+
+        if assistant_content is None and hasattr(message, "content") and message.content:
+            assistant_content = message.content
+
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            for tc in message.tool_calls:
+                fn = getattr(tc, "function", tc) if hasattr(tc, "function") else tc
+                name = getattr(fn, "name", None) or (fn.get("name") if isinstance(fn, dict) else None)
+
+                if name == "finish":
+                    args = getattr(fn, "arguments", None) or (
+                        fn.get("arguments", "{}") if isinstance(fn, dict) else "{}"
+                    )
+                    try:
+                        obj = json.loads(args) if isinstance(args, str) else args
+                        if isinstance(obj, dict) and "message" in obj:
+                            finish_message = obj["message"]
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+        if assistant_content and finish_message:
+            break
+
+    if assistant_content and finish_message:
+        return f"{assistant_content}\n\n[FINAL]\n{finish_message}"
+    elif finish_message:
+        return finish_message
+    elif assistant_content:
+        return assistant_content
+
+    return ""
+
+
 def extract_agent_response(trajectory: Any) -> str:
     """从轨迹中提取Agent的最终回答
 
@@ -38,40 +85,23 @@ def extract_agent_response(trajectory: Any) -> str:
     """
     if not trajectory or not trajectory.dialogs:
         return ""
-
-    # 获取最后一个对话
     last_dialog = trajectory.dialogs[-1]
-    
-    # 查找最后一个助手消息
     for message in reversed(last_dialog.messages):
-        if hasattr(message, 'role') and message.role.value == 'assistant':
-            # 正常 assistant content
-            if hasattr(message, 'content') and message.content:
-                return message.content
-
-            # tool_calls 形式的最终回答
-            if hasattr(message, 'tool_calls') and message.tool_calls:
-                for tool_call in message.tool_calls:
-                    if not hasattr(tool_call, 'function'):
-                        continue
-                    func = tool_call.function
-
-                    if not hasattr(func, 'arguments'):
-                        continue
-
-                    args = func.arguments
-
-                    if not args:
-                        continue
-
-                    # arguments 可能是 JSON 字符串
+        if not (hasattr(message, "role") and getattr(message.role, "value", message.role) == "assistant"):
+            continue
+        # 若该条 assistant 调用了 finish，优先用 finish 的 message 作为回答
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            for tc in message.tool_calls:
+                fn = getattr(tc, "function", tc) if hasattr(tc, "function") else tc
+                name = getattr(fn, "name", None) or (fn.get("name") if isinstance(fn, dict) else None)
+                if name == "finish":
+                    args = getattr(fn, "arguments", None) or (fn.get("arguments", "{}") if isinstance(fn, dict) else "{}")
                     try:
-                        args_dict = json.loads(args)
-                    except Exception:
-                        continue
-
-                    # 优先取 message 字段
-                    if "message" in args_dict and args_dict["message"]:
-                        return args_dict["message"]
-            
+                        obj = json.loads(args) if isinstance(args, str) else args
+                        if isinstance(obj, dict) and "message" in obj:
+                            return obj["message"]
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+        if hasattr(message, "content") and message.content:
+            return message.content
     return ""

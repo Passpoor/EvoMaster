@@ -1,18 +1,9 @@
-"""X-Master Playground 实现
-
-实现完整的X-Master工作流：
-1. Solver: 生成初始解决方案
-2. Critic: 批评和修正解决方案
-3. Rewriter: 重写和整合解决方案
-4. Selector: 选择最佳解决方案
-
-"""
-
 import logging
 import sys
 import json
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+from functools import partial
 
 # 确保可以导入evomaster模块
 project_root = Path(__file__).parent.parent.parent.parent
@@ -29,6 +20,7 @@ class XMasterPlayground(BasePlayground):
     """X-Master Playground
     
     协调四个Exp类，实现完整的X-Master工作流。
+    支持结果有效性验证与自动重试。
     """
     
     def __init__(self, config_dir: Path = None, config_path: Path = None):
@@ -52,8 +44,8 @@ class XMasterPlayground(BasePlayground):
         self.selector_results = []
 
         self.mcp_manager = None
+        self.max_retries = 3  # 默认值，将在_setup中覆盖
         
-    
     def setup(self) -> None:
         """初始化所有组件
         
@@ -85,9 +77,29 @@ class XMasterPlayground(BasePlayground):
         self.agent_num = xmaster_config.get('agent_num', 1)
         self.max_workers = xmaster_config.get('max_workers', 1)
         self.parallel = xmaster_config.get('parallel', True)
+        self.max_retries = xmaster_config.get('max_retries', 3)  # 新增重试次数配置
 
-        self.logger.info(f"Workflow config: agent_num={self.agent_num}, max_workers={self.max_workers}")
+        self.logger.info(f"Workflow config: agent_num={self.agent_num}, max_workers={self.max_workers}, max_retries={self.max_retries}")
 
+    def _is_valid_result(self, result_dict: Dict[str, Any], key: str) -> bool:
+        """检查结果是否有效（非None且非空字符串）
+        
+        Args:
+            result_dict: 实验返回的结果字典
+            key: 需要检查的键名
+            
+        Returns:
+            是否有效
+        """
+        if key not in result_dict:
+            return False
+        value = result_dict[key]
+        if value is None:
+            return False
+        if isinstance(value, str) and value.strip() == "":
+            return False
+        # 可根据需要扩展其他类型的验证
+        return True
 
     def _create_exp(self, exp_index, exp_name:str):
         """创建多智能体实验实例"""
@@ -218,152 +230,287 @@ class XMasterPlayground(BasePlayground):
         self.logger.info(f"找到 {key}: {results[key][:50]}...")
         return solutions
     
-    def _run_with_parallel(self,task_description: str, task_id: str = None):
+    def _run_with_parallel(self, task_description: str, task_id: str = None):
+        """并行执行工作流（带重试机制）"""
         self.logger.info(f"=== Parallel Process ({self.agent_num} agents) ===")
-        from functools import partial
-        # ---------- Phase 1: Solver (并行) ----------
-        self.logger.info(f"=== Phase 1: Solver (parallel, {self.agent_num} agents) ===")
-        solver_tasks = []
-        for i in range(self.max_workers):
-            exp = self._create_exp(exp_index=i, exp_name="solve")
-            task_func = partial(
-                exp.run,
-                task_description=task_description,
-                task_id=f"{task_id}_solver",
-            )
-            solver_tasks.append(task_func)
         
-        solver_results_list = self.execute_parallel_tasks(solver_tasks, max_workers=self.max_workers)
-
-        self.solver_results = solver_results_list
-
-        original_solutions = self._extract_solutions_from_results(self.solver_results)
-
+        # ---------- Phase 1: Solver (并行，带重试) ----------
+        self.logger.info(f"=== Phase 1: Solver (parallel, {self.agent_num} agents) ===")
+        
+        # 初始化最终结果列表
+        final_solutions = [None] * self.agent_num
+        # 需要重试的索引列表
+        pending_indices = list(range(self.agent_num))
+        retry = 0
+        
+        while retry < self.max_retries and pending_indices:
+            tasks = []
+            for idx in pending_indices:
+                exp = self._create_exp(exp_index=idx, exp_name="solve")
+                task_func = partial(
+                    exp.run,
+                    task_description=task_description,
+                    task_id=f"{task_id}_solver" + (f"_retry{retry}" if retry > 0 else "")
+                )
+                tasks.append((idx, task_func))
+            
+            # 执行当前批次任务
+            current_tasks = [tf for _, tf in tasks]
+            results_batch = self.execute_parallel_tasks(current_tasks, max_workers=self.max_workers)
+            
+            # 更新结果
+            new_pending = []
+            for (idx, _), result in zip(tasks, results_batch):
+                key = "solver_result"
+                if self._is_valid_result(result, key):
+                    final_solutions[idx] = result[key]
+                    self.logger.info(f"index:{idx} Solver 成功")
+                else:
+                    self.logger.warning(f"index:{idx} Solver 结果无效，将重试")
+                    new_pending.append(idx)
+            
+            pending_indices = new_pending
+            retry += 1
+            if pending_indices:
+                self.logger.warning(f"Solver 阶段仍有 {len(pending_indices)} 个无效结果，第 {retry} 次重试")
+        
+        if pending_indices:
+            raise RuntimeError(f"Solver 阶段在 {self.max_retries} 次重试后仍未能获得所有有效结果，缺失索引: {pending_indices}")
+        
+        # 转换为标准结果格式
+        self.solver_results = [{"exp_index": i, "solver_result": final_solutions[i]} for i in range(self.agent_num)]
+        original_solutions = final_solutions
         self.logger.info(f"Solver generated {len(original_solutions)} solutions")
 
-
-        # ---------- Phase 2: Critic (并行，一一对应) ----------
+        # ---------- Phase 2: Critic (并行，一一对应，带重试) ----------
         self.logger.info(f"=== Phase 2: Critic (parallel, {self.agent_num} agents) ===")
-        critic_tasks = []
-        for i in range(self.agent_num):
-            exp = self._create_exp(exp_index=i, exp_name="critique")
-            task_func = partial(
-                exp.run,
-                task_description=task_description,
-                solution=original_solutions[i],   # 只传递对应的一个解
-                task_id=f"{task_id}_critic"
-            )
-            critic_tasks.append(task_func)
         
-        critic_results_list = self.execute_parallel_tasks(critic_tasks, max_workers=self.max_workers)
-
-        self.critic_results = critic_results_list
-
-        corrected_solutions = self._extract_corrected_solutions(self.critic_results)
+        final_critic_solutions = [None] * self.agent_num
+        pending_indices = list(range(self.agent_num))
+        retry = 0
+        
+        while retry < self.max_retries and pending_indices:
+            tasks = []
+            for idx in pending_indices:
+                exp = self._create_exp(exp_index=idx, exp_name="critique")
+                task_func = partial(
+                    exp.run,
+                    task_description=task_description,
+                    solution=original_solutions[idx],  # 传入对应的原始解
+                    task_id=f"{task_id}_critic" + (f"_retry{retry}" if retry > 0 else "")
+                )
+                tasks.append((idx, task_func))
+            
+            current_tasks = [tf for _, tf in tasks]
+            results_batch = self.execute_parallel_tasks(current_tasks, max_workers=self.max_workers)
+            
+            new_pending = []
+            for (idx, _), result in zip(tasks, results_batch):
+                key = "critic_result"
+                if self._is_valid_result(result, key):
+                    final_critic_solutions[idx] = result[key]
+                    self.logger.info(f"index:{idx} Critic 成功")
+                else:
+                    self.logger.warning(f"index:{idx} Critic 结果无效，将重试")
+                    new_pending.append(idx)
+            
+            pending_indices = new_pending
+            retry += 1
+            if pending_indices:
+                self.logger.warning(f"Critic 阶段仍有 {len(pending_indices)} 个无效结果，第 {retry} 次重试")
+        
+        if pending_indices:
+            raise RuntimeError(f"Critic 阶段在 {self.max_retries} 次重试后仍未能获得所有有效结果，缺失索引: {pending_indices}")
+        
+        self.critic_results = [{"exp_index": i, "critic_result": final_critic_solutions[i]} for i in range(self.agent_num)]
+        corrected_solutions = final_critic_solutions
         self.logger.info(f"Critic generated {len(corrected_solutions)} corrected solutions")
 
-        # ---------- Phase 3: Rewriter (并行，综合所有) ----------
+        # ---------- Phase 3: Rewriter (并行，综合所有，带重试) ----------
         self.logger.info(f"=== Phase 3: Rewriter (parallel, {self.agent_num} agents) ===")
-        rewriter_tasks = []
-        for i in range(self.agent_num):
-            exp = self._create_exp(exp_index=i, exp_name="rewrite")
-            task_func = partial(
-                exp.run,
-                task_description=task_description,
-                solutions=corrected_solutions,       # 传递所有修正解
-                task_id=f"{task_id}_rewriter"
-            )
-            rewriter_tasks.append(task_func)
         
-        rewriter_results_list = self.execute_parallel_tasks(rewriter_tasks, max_workers=self.max_workers)
-
-        self.rewriter_results = rewriter_results_list
-
-        rewritten_solutions = self._extract_rewritten_solutions(self.rewriter_results)
+        final_rewritten_solutions = [None] * self.agent_num
+        pending_indices = list(range(self.agent_num))
+        retry = 0
         
+        # 重写阶段依赖所有修正后的解决方案，该列表已完整
+        all_corrected = corrected_solutions
+        
+        while retry < self.max_retries and pending_indices:
+            tasks = []
+            for idx in pending_indices:
+                exp = self._create_exp(exp_index=idx, exp_name="rewrite")
+                task_func = partial(
+                    exp.run,
+                    task_description=task_description,
+                    solutions=all_corrected,  # 传入所有修正解
+                    task_id=f"{task_id}_rewriter" + (f"_retry{retry}" if retry > 0 else "")
+                )
+                tasks.append((idx, task_func))
+            
+            current_tasks = [tf for _, tf in tasks]
+            results_batch = self.execute_parallel_tasks(current_tasks, max_workers=self.max_workers)
+            
+            new_pending = []
+            for (idx, _), result in zip(tasks, results_batch):
+                key = "rewriter_result"
+                if self._is_valid_result(result, key):
+                    final_rewritten_solutions[idx] = result[key]
+                    self.logger.info(f"index:{idx} Rewriter 成功")
+                else:
+                    self.logger.warning(f"index:{idx} Rewriter 结果无效，将重试")
+                    new_pending.append(idx)
+            
+            pending_indices = new_pending
+            retry += 1
+            if pending_indices:
+                self.logger.warning(f"Rewriter 阶段仍有 {len(pending_indices)} 个无效结果，第 {retry} 次重试")
+        
+        if pending_indices:
+            raise RuntimeError(f"Rewriter 阶段在 {self.max_retries} 次重试后仍未能获得所有有效结果，缺失索引: {pending_indices}")
+        
+        self.rewriter_results = [{"exp_index": i, "rewriter_result": final_rewritten_solutions[i]} for i in range(self.agent_num)]
+        rewritten_solutions = final_rewritten_solutions
         self.logger.info(f"Rewriter generated {len(rewritten_solutions)} rewritten solutions")
 
-        # ---------- Phase 4: Selector (单 Agent) ----------
+        # ---------- Phase 4: Selector (单 Agent，带重试) ----------
         self.logger.info("=== Phase 4: Selector ===")
-        selector_exp = self._create_exp(exp_index=0, exp_name="select")
-        self.selector_results = selector_exp.run(
-            task_description=task_description,
-            solutions=rewritten_solutions,
-            task_id=f"{task_id}_selector"
-        )
-
-        selected_solution = self._extract_selected_solution(self.selector_results)
+        
+        selected_solution = None
+        retry = 0
+        while retry < self.max_retries and selected_solution is None:
+            selector_exp = self._create_exp(exp_index=0, exp_name="select")
+            result = selector_exp.run(
+                task_description=task_description,
+                solutions=rewritten_solutions,
+                task_id=f"{task_id}_selector" + (f"_retry{retry}" if retry > 0 else "")
+            )
+            key = "selector_result"
+            if self._is_valid_result(result, key):
+                selected_solution = result[key]
+                self.logger.info("Selector 成功")
+            else:
+                self.logger.warning(f"Selector 结果无效，第 {retry+1} 次重试")
+                retry += 1
+        
+        if selected_solution is None:
+            raise RuntimeError(f"Selector 阶段在 {self.max_retries} 次重试后仍未能获得有效结果")
+        
+        self.selector_results = result  # 保持原始格式
         self.logger.info("Selector completed, best solution selected")
 
         return original_solutions, corrected_solutions, rewritten_solutions, selected_solution
 
-
-    def _run_with_serial(self,task_description: str, task_id: str = None):
-
+    def _run_with_serial(self, task_description: str, task_id: str = None):
+        """串行执行工作流（带重试机制）"""
         self.logger.info(f"=== Serial Process ({self.agent_num} agents) ===")
-        # 1. Solver阶段：生成初始解决方案
+        
+        # 1. Solver阶段
         self.logger.info(f"=== Phase 1: Solver (serial, {self.agent_num} agents) ===")
+        solver_solutions = []
         for i in range(self.agent_num):
-            exp = self._create_exp(exp_index=i,exp_name="solve")
-            solver_results = exp.run(
-                task_description=task_description,
-                task_id=f"{task_id}_solver"
-            )
-            self.solver_results.append(solver_results)
-
-        # 提取Solver的解决方案
-        original_solutions = self._extract_solutions_from_results(self.solver_results)
+            solution = None
+            retry = 0
+            while retry < self.max_retries and solution is None:
+                exp = self._create_exp(exp_index=i, exp_name="solve")
+                result = exp.run(
+                    task_description=task_description,
+                    task_id=f"{task_id}_solver_{i}" + (f"_retry{retry}" if retry > 0 else "")
+                )
+                key = "solver_result"
+                if self._is_valid_result(result, key):
+                    solution = result[key]
+                    self.logger.info(f"index:{i} Solver 成功")
+                else:
+                    self.logger.warning(f"index:{i} Solver 结果无效，第 {retry+1} 次重试")
+                    retry += 1
+            if solution is None:
+                raise RuntimeError(f"Solver 阶段 index {i} 在 {self.max_retries} 次重试后仍失败")
+            solver_solutions.append(solution)
+            self.solver_results.append({"exp_index": i, "solver_result": solution})
+        
+        original_solutions = solver_solutions
         self.logger.info(f"Solver generated {len(original_solutions)} solutions")
-        
-        # 2. Critic阶段：批评和修正解决方案
+
+        # 2. Critic阶段
         self.logger.info(f"=== Phase 2: Critic (serial, {self.agent_num} agents) ===")
+        critic_solutions = []
         for i in range(self.agent_num):
-            exp = self._create_exp(exp_index=i,exp_name="critique")
-            critic_results = exp.run(
-                task_description=task_description,
-                solution=original_solutions[i],  
-                task_id=f"{task_id}_critic"
-            )
-            self.critic_results.append(critic_results)
+            solution = None
+            retry = 0
+            while retry < self.max_retries and solution is None:
+                exp = self._create_exp(exp_index=i, exp_name="critique")
+                result = exp.run(
+                    task_description=task_description,
+                    solution=original_solutions[i],
+                    task_id=f"{task_id}_critic_{i}" + (f"_retry{retry}" if retry > 0 else "")
+                )
+                key = "critic_result"
+                if self._is_valid_result(result, key):
+                    solution = result[key]
+                    self.logger.info(f"index:{i} Critic 成功")
+                else:
+                    self.logger.warning(f"index:{i} Critic 结果无效，第 {retry+1} 次重试")
+                    retry += 1
+            if solution is None:
+                raise RuntimeError(f"Critic 阶段 index {i} 在 {self.max_retries} 次重试后仍失败")
+            critic_solutions.append(solution)
+            self.critic_results.append({"exp_index": i, "critic_result": solution})
         
-        # 提取Critic修正后的解决方案
-        corrected_solutions = self._extract_corrected_solutions(self.critic_results)
+        corrected_solutions = critic_solutions
         self.logger.info(f"Critic generated {len(corrected_solutions)} corrected solutions")
-        
-        # 3. Rewriter阶段：重写和整合解决方案
+
+        # 3. Rewriter阶段
         self.logger.info(f"=== Phase 3: Rewriter (serial, {self.agent_num} agents) ===")
-        
-        # 准备Rewriter的输入数据
-
+        rewritten_solutions = []
         for i in range(self.agent_num):
-            exp = self._create_exp(exp_index=i,exp_name="rewrite")
-            rewriter_results = exp.run(
-                task_description=task_description,
-                solutions=corrected_solutions,
-                task_id=f"{task_id}_rewriter"
-            )
-            self.rewriter_results.append(rewriter_results)
+            solution = None
+            retry = 0
+            while retry < self.max_retries and solution is None:
+                exp = self._create_exp(exp_index=i, exp_name="rewrite")
+                result = exp.run(
+                    task_description=task_description,
+                    solutions=corrected_solutions,
+                    task_id=f"{task_id}_rewriter_{i}" + (f"_retry{retry}" if retry > 0 else "")
+                )
+                key = "rewriter_result"
+                if self._is_valid_result(result, key):
+                    solution = result[key]
+                    self.logger.info(f"index:{i} Rewriter 成功")
+                else:
+                    self.logger.warning(f"index:{i} Rewriter 结果无效，第 {retry+1} 次重试")
+                    retry += 1
+            if solution is None:
+                raise RuntimeError(f"Rewriter 阶段 index {i} 在 {self.max_retries} 次重试后仍失败")
+            rewritten_solutions.append(solution)
+            self.rewriter_results.append({"exp_index": i, "rewriter_result": solution})
         
-        # 提取Rewriter重写后的解决方案
-        rewritten_solutions = self._extract_rewritten_solutions(self.rewriter_results)
         self.logger.info(f"Rewriter generated {len(rewritten_solutions)} rewritten solutions")
-        
-        # 4. Selector阶段：选择最佳解决方案
-        self.logger.info("=== Phase 4: Selector ===")
-        
-        # 准备Selector的输入数据
-        exp = self._create_exp(exp_index=i,exp_name="select")
 
-        self.selector_results = exp.run(
-            task_description=task_description,
-            solutions=rewritten_solutions,
-            task_id=f"{task_id}_selector"
-        )
+        # 4. Selector阶段
+        self.logger.info("=== Phase 4: Selector ===")
+        selected_solution = None
+        retry = 0
+        while retry < self.max_retries and selected_solution is None:
+            exp = self._create_exp(exp_index=0, exp_name="select")
+            result = exp.run(
+                task_description=task_description,
+                solutions=rewritten_solutions,
+                task_id=f"{task_id}_selector" + (f"_retry{retry}" if retry > 0 else "")
+            )
+            key = "selector_result"
+            if self._is_valid_result(result, key):
+                selected_solution = result[key]
+                self.logger.info("Selector 成功")
+            else:
+                self.logger.warning(f"Selector 结果无效，第 {retry+1} 次重试")
+                retry += 1
         
-        # 提取Selector选中的解决方案
-        selected_solution = self._extract_selected_solution(self.selector_results)
+        if selected_solution is None:
+            raise RuntimeError(f"Selector 阶段在 {self.max_retries} 次重试后仍未能获得有效结果")
+        
+        self.selector_results = result
         self.logger.info("Selector completed, best solution selected")
-        
 
         return original_solutions, corrected_solutions, rewritten_solutions, selected_solution
     
@@ -389,7 +536,6 @@ class XMasterPlayground(BasePlayground):
         else:
             original_solutions, corrected_solutions, rewritten_solutions, selected_solution = self._run_with_serial(task_description, task_id)
 
-        
         # 构建最终结果
         final_result = {
             "status": "completed",
@@ -406,12 +552,6 @@ class XMasterPlayground(BasePlayground):
                 "original_count": len(original_solutions),
                 "corrected_count": len(corrected_solutions),
                 "rewritten_count": len(rewritten_solutions)
-            },
-            "trajectory": {
-                "solver_trajectory":self.solver_results,
-                "critic_trajectory":self.critic_results,
-                "rewriter_trajectory":self.rewriter_results,
-                "selector_trajectory":self.selector_results
             }
         }
         
@@ -452,7 +592,6 @@ class XMasterPlayground(BasePlayground):
         # 清理基类资源
         super().cleanup()
              
-        
         # 清空结果
         self.solver_results = None
         self.critic_results = None
@@ -460,5 +599,3 @@ class XMasterPlayground(BasePlayground):
         self.selector_results = None
         
         self.logger.debug("X-Master resources cleaned up")
-    
-    

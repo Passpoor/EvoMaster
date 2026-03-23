@@ -4,7 +4,6 @@ from typing import Any
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tenacity import retry, stop_after_attempt, wait_random_exponential, retry_if_exception_type
-
 from evomaster import TaskInstance
 from evomaster.agent import BaseAgent
 from evomaster.core.exp import BaseExp
