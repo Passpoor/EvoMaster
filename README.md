@@ -43,7 +43,7 @@ https://github.com/user-attachments/assets/d5e2500b-f589-4676-b6cb-dce8ae000f2c
 
 **EvoMaster** is a lightweight yet powerful framework designed to enable researchers and developers to rapidly build their own scientific agents, free from the engineering burden of tool calling, skill composition, memory storage, and more.
 
-**MagiClaw** is a Feishu (Lark) intelligent assistant built on EvoMaster. Through natural language conversation, it can help you create new agents based on the EvoMaster framework, or orchestrate multiple existing agents to collaborate on tasks.
+**[MagiClaw](https://github.com/sjtu-sai-agents/MagiClaw)** is a Feishu (Lark) intelligent assistant built on EvoMaster. Through natural language conversation, it can help you create new agents based on the EvoMaster framework, or orchestrate multiple existing agents to collaborate on tasks.
 
 ## <a id="key-features"></a>✨ Key Features
 
