@@ -19,14 +19,21 @@
 
 <table align="center" width="100%">
 <tr>
-<td width="50%" align="center" style="vertical-align: top; padding: 10px;">
+<td width="33%" align="center" style="vertical-align: top; padding: 10px;">
+
+<strong>LLM Training</strong>
+
+https://github.com/user-attachments/assets/62c132c1-6fe8-4c18-89c6-be330fab2c6f
+
+</td>
+<td width="33%" align="center" style="vertical-align: top; padding: 10px;">
 
 <strong>Material Science</strong>
 
 https://github.com/user-attachments/assets/590365c0-95a6-467e-a22b-3c373fb2bb8a
 
 </td>
-<td width="50%" align="center" style="vertical-align: top; padding: 10px;">
+<td width="33%" align="center" style="vertical-align: top; padding: 10px;">
 
 <strong>Create an ML Agent</strong>
 
