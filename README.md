@@ -125,7 +125,7 @@ For the full documentation, please refer to [docs/README.md](./docs/README.md).
 
 ```bash
 # Clone repository
-git clone https://github.com/sjtu-sai-agents/EvoMaster.git
+git clone -b main --single-branch https://github.com/sjtu-sai-agents/EvoMaster.git
 cd EvoMaster
 
 # Install dependencies
