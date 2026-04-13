@@ -17,33 +17,45 @@
 
 *Accelerating the "AI for Science" revolution by making intelligent agent development accessible, modular, and powerful.*
 
+*A complete closed loop of scientific workflows built with EvoMaster*
+
 <table align="center" width="100%">
 <tr>
-<td width="33%" align="center" valign="top">
+<td width="33%" align="center" style="vertical-align: top; padding: 10px;">
 
 **LLM training**
 
-https://github.com/user-attachments/assets/a4b8042a-72ab-4fc3-893b-243e74eca6cc
+https://github.com/user-attachments/assets/62c132c1-6fe8-4c18-89c6-be330fab2c6f
 
 </td>
-<td width="33%" align="center" valign="top">
+<td width="33%" align="center" style="vertical-align: top; padding: 10px;">
 
 **Material science**
 
-https://github.com/user-attachments/assets/43b94144-a684-4ffe-9c45-aa5fd2242ce2
+https://github.com/user-attachments/assets/590365c0-95a6-467e-a22b-3c373fb2bb8a
 
 </td>
-<td width="33%" align="center" valign="top">
+<td width="33%" align="center" style="vertical-align: top; padding: 10px;">
 
 **Create an ML agent**
 
-https://github.com/user-attachments/assets/a8fe00ba-531c-4d53-b7bd-1bbedf7a6442
+https://github.com/user-attachments/assets/d5e2500b-f589-4676-b6cb-dce8ae000f2c
 
 </td>
 </tr>
 </table>
 
 </div>
+
+## 📰 News
+
+**2026-04-12** EvoMaster `v0.1.1` is released! MagiClaw has now been moved to a [standalone repository](https://github.com/sjtu-sai-agents/MagiClaw). EvoMaster now supports being invoked as a skill and adds example custom tools.
+
+**2026-03-23** EvoMaster `v0.1.0` is released! We open-sourced ML-Master 1.0, ML-Master 2.0, X-Master, Browse-Master, and more, with support for [MagiClaw](https://github.com/sjtu-sai-agents/MagiClaw): create agents through Feishu conversations and use TypeScript-format skills.
+
+**2026-03-02** EvoMaster `v0.0.2` is released! The codebase was refactored and optimized, and agents now support a high degree of customization.
+
+**2026-02-06** The initial EvoMaster code release `v0.0.1` is out!
 
 ## <a id="introduction"></a>📖 Introduction
 
@@ -88,7 +100,7 @@ We have unified the implementation and open-sourced multiple SciMaster series ag
 |-------|---------|---------|--------|
 | **Current** | v0.0.x | Core framework, basic documentation, simple agent examples | ✅ Completed |
 | **Phase 1** | v0.1.x | Open-source SciMaster series agent implementations | ✅ Completed |
-| **Phase 2** | v0.2.x | Open-source MagiClaw Feishu intelligent assistant | 🔜 In Progress |
+| **Phase 2** | v0.2.x | Open-source [MagiClaw](https://github.com/sjtu-sai-agents/MagiClaw) Feishu intelligent assistant | ✅ Completed |
 | **Phase 3** | v0.3.x | Bohrium Tool Library — Integrate [Bohrium](https://www.bohrium.com/) with native support for 30,000+ scientific tools & APIs | 💡 Exploring |
 
 
@@ -101,11 +113,10 @@ EvoMaster/
 │   ├── agent/                        # Agent components (Agent, Session, Tools)
 │   ├── core/                         # Workflow (Exp, Playground)
 │   ├── env/                          # Environment (Docker, Local)
-│   ├── interface/                    # External interfaces (Feishu, etc.)
-│   ├── memory/                       # Memory system
 │   ├── skills/                       # Skill system
 │   ├── skills_ts/                    # TypeScript skills (OpenClaw bridge)
 │   └── utils/                        # Utilities (LLM, Types)
+├── extensions/                       # Use EvoMaster through skills and official example custom tools
 ├── playground/                       # Playground implementations
 ├── configs/                          # Configuration files
 └── docs/                             # Documentation
@@ -125,7 +136,7 @@ For the full documentation, please refer to [docs/README.md](./docs/README.md).
 
 ```bash
 # Clone repository
-git clone https://github.com/sjtu-sai-agents/EvoMaster.git
+git clone -b main --single-branch https://github.com/sjtu-sai-agents/EvoMaster.git
 cd EvoMaster
 
 # Install dependencies

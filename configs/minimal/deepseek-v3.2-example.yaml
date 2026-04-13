@@ -30,7 +30,7 @@ llm:
   # Local LLM configuration example
   local_sglang:
     provider: "deepseek"
-    model: "openapi/kimi-k2.5"
+    model: "deepseek-v3.2"
     api_key: "${DEEPSEEK_API_KEY}"  # Placeholder can be used for local deployment
     base_url: "${DEEPSEEK_API_BASE}"
     temperature: 0.7

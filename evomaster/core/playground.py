@@ -176,9 +176,38 @@ class BasePlayground:
         self.agents = AgentSlots()
         self.exps = {}
         self.tools = None
-        self.mcp_manager = None
+        self._mcp_managers: dict[str, Any] = {}
         self._base_skill_registry = None
         self.openclaw_bridge = None
+
+    @property
+    def mcp_manager(self):
+        """Backward-compatible accessor: returns the first MCP manager or None."""
+        if not self._mcp_managers:
+            return None
+        return next(iter(self._mcp_managers.values()))
+
+    @mcp_manager.setter
+    def mcp_manager(self, value):
+        """Backward-compatible setter for subclass ``self.mcp_manager = None``."""
+        if value is None:
+            self._mcp_managers.clear()
+        else:
+            self._mcp_managers["_default"] = value
+
+    def _resolve_mcp_config_key(self, mcp_config_file: str) -> str:
+        """Resolve an MCP config file path to a canonical dict key.
+
+        Args:
+            mcp_config_file: Raw config file path (relative or absolute).
+
+        Returns:
+            Resolved absolute path string used as key in ``_mcp_managers``.
+        """
+        config_path = Path(mcp_config_file)
+        if not config_path.is_absolute():
+            config_path = self.config_manager.config_dir / config_path
+        return str(config_path.resolve())
 
     def _start_loop_in_thread(self) -> threading.Thread:
         """Start an asyncio event loop in a daemon thread for MCP.
@@ -579,11 +608,13 @@ class BasePlayground:
 
         # MCP: load MCP tools when mcp_config_file is non-empty
         if mcp_config_file:
-            # Only initialize the connection once; subsequent agents reuse and register to the new registry
-            if self.mcp_manager is None:
-                self.mcp_manager = self._setup_mcp_tools(mcp_config_file)
-            elif self.mcp_manager is not None:
-                self.mcp_manager.register_tools(self.tools)
+            mcp_key = self._resolve_mcp_config_key(mcp_config_file)
+            if mcp_key not in self._mcp_managers:
+                manager = self._setup_mcp_tools(mcp_config_file)
+                if manager is not None:
+                    self._mcp_managers[mcp_key] = manager
+            else:
+                self._mcp_managers[mcp_key].register_tools(self.tools)
 
         # Auto-register custom tools
         custom_tools = tool_config.get("custom", {})
@@ -838,7 +869,12 @@ class BasePlayground:
             enabled_tool_names.extend(builtin)
 
         if mcp_config_file != "":
-            enabled_tool_names.extend(self.mcp_manager.get_tool_names())
+            mcp_key = self._resolve_mcp_config_key(mcp_config_file)
+            manager = self._mcp_managers.get(mcp_key)
+            if manager is not None:
+                enabled_tool_names.extend(manager.get_tool_names())
+            else:
+                self.logger.warning(f"MCP manager not found for key: {mcp_key}")
         if skills != []:
             enabled_tool_names.extend(["use_skill"])
 
@@ -1281,14 +1317,18 @@ class BasePlayground:
                 self.logger.warning(f"Error stopping Openclaw bridge: {e}")
             self.openclaw_bridge = None
 
-        if self.mcp_manager:
+        if self._mcp_managers:
             try:
                 loop = self._mcp_loop
                 t = self._mcp_thread
 
                 if loop is not None and not loop.is_closed():
-                    # 1) First perform async cleanup in the MCP loop
-                    fut = asyncio.run_coroutine_threadsafe(self.mcp_manager.cleanup(), loop)
+                    # 1) Perform async cleanup for all MCP managers
+                    async def _cleanup_all():
+                        for mgr in self._mcp_managers.values():
+                            await mgr.cleanup()
+
+                    fut = asyncio.run_coroutine_threadsafe(_cleanup_all(), loop)
                     fut.result()
 
                     # 2) Stop the loop
@@ -1303,6 +1343,7 @@ class BasePlayground:
                     if not loop.is_closed():
                         loop.close()
 
+                self._mcp_managers.clear()
                 self._mcp_loop = None
                 self._mcp_thread = None
 
