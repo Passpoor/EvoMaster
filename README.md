@@ -10,6 +10,7 @@
   <a href="#scimaster-series"><img src="https://img.shields.io/badge/SciMaster-6%2B%20Agents-059669?style=for-the-badge" alt="SciMaster"></a>
   <a href="#key-features"><img src="https://img.shields.io/badge/Key%20Features-4%20Highlights-7c3aed?style=for-the-badge" alt="Key Features"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-ea580c?style=for-the-badge" alt="License"></a>
+  <a href="#contact-us"><img src="https://img.shields.io/badge/WeChat-Join%20Group-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat Group"></a>
 </p>
 <div align="center">
 
@@ -293,6 +294,19 @@ python run.py --agent browse_master --config configs/browse_master/config.yaml -
 
 ## 🤝 Contributing
 We welcome contributions to EvoMaster! Feel free to make a pull request if you have any ideas, bug fixes, or new features. For major changes, please open an issue first to discuss your change proposal.
+
+## <a id="contact-us"></a>💬 Contact Us
+
+We welcome discussions, questions, and feedback! Join our WeChat group:
+
+<div align="center">
+
+<img src="https://github.com/user-attachments/assets/d4d75de7-cb49-4a7b-9d6e-59e60a5d45b7" width="250" alt="WeChat Group QR Code"/>
+
+*Scan the QR code to join our WeChat group*
+
+</div>
+
 
 ## ⭐ Star History
 If you find EvoMaster and MagiClaw helpful, please consider giving us a star! ⭐
