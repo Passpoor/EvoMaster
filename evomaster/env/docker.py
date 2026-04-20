@@ -1,16 +1,47 @@
 """Docker environment implementation.
 
 Provides the low-level operations interface for Docker containers.
+
+Design notes
+============
+The previous version of this module relied on a long-running tmux session
+inside the container plus a multi-line PS1 marker scheme. That design was
+fragile: it depended on apt-get availability, multi-line PS1 quoting through
+``tmux send-keys``, and on the markers not appearing in user output. It also
+silently broke when host volume paths were relative (Docker treats those as
+named volumes), and when ``auto_remove=true`` was combined with the post-stop
+``docker rm -f`` call.
+
+The current implementation is much simpler: one ``docker exec`` per command,
+with the per-thread working directory persisted to a state file inside the
+container. Concrete consequences:
+
+* No tmux dependency, no PS1 magic; works against any image with ``bash``.
+* Working directory persists across consecutive ``exec_bash`` calls in the
+  same thread (so ``cd`` inside one command is visible to the next), which
+  matches the contract advertised by ``BashTool`` ("persistent shell").
+* Exported environment variables and background processes do **not** persist
+  across calls. Agents that need that should chain commands with ``&&``.
+* Each thread keeps its own cwd state, so parallel exps that share a single
+  container do not stomp on each other (used by the parallel playground).
+* Volume host paths are resolved to absolute paths (and created on the host)
+  before being passed to ``docker run`` so relative paths in YAML work.
+* ``is_input`` (interactive STDIN to a still-running command) is not
+  supported; the session returns a clear error message, mirroring the
+  behavior of ``LocalSession``.
 """
 
 from __future__ import annotations
 
-import json
+import logging
 import os
-import re
+import shlex
+import shutil
 import subprocess
 import tempfile
+import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -24,407 +55,488 @@ class DockerEnvConfig(EnvConfig):
     """Docker environment configuration."""
     session_config: SessionConfig = Field(
         ...,
-        description="Session configuration"
+        description="Session configuration",
     )
 
 
-# PS1 Prompt configuration used for parsing bash output
-PS1_BEGIN = "\n===PS1JSONBEGIN===\n"
-PS1_END = "\n===PS1JSONEND===\n"
-PS1_PATTERN = re.compile(
-    f"{PS1_BEGIN.strip()}(.*?){PS1_END.strip()}",
-    re.DOTALL | re.MULTILINE,
-)
+# Marker line emitted by the bash wrapper at the end of every stateful
+# command. Includes the exit code and the new working directory so the
+# session can update its cached cwd without an extra ``docker exec`` call.
+_EVO_MARKER = "__EVOMASTER_CMD_END__"
 
 
-class BashMetadata:
-    """Bash execution metadata."""
-    
-    def __init__(
-        self,
-        exit_code: int = -1,
-        working_dir: str = "",
-        pid: int = -1,
-    ):
-        self.exit_code = exit_code
-        self.working_dir = working_dir
-        self.pid = pid
+def _resolve_host_path(host_path: str) -> str:
+    """Resolve a (possibly relative or ``~``-expanded) host path to an absolute path.
 
-    @classmethod
-    def to_ps1_prompt(cls) -> str:
-        """Generate the PS1 prompt configuration."""
-        prompt = "===PS1JSONBEGIN==="
-        json_str = json.dumps({
-            "pid": "$!",
-            "exit_code": "$?",
-            "working_dir": r"$(pwd)",
-        }, indent=2)
-        prompt += json_str.replace('"', r'\"')
-        prompt += "===PS1JSONEND===\n"
-        return prompt
-
-    @classmethod
-    def from_json(cls, json_str: str) -> BashMetadata:
-        """Parse metadata from a JSON string."""
-        try:
-            data = json.loads(json_str)
-            return cls(
-                exit_code=int(data.get("exit_code", -1)),
-                working_dir=data.get("working_dir", ""),
-                pid=int(data.get("pid", -1)) if data.get("pid") else -1,
-            )
-        except (json.JSONDecodeError, ValueError):
-            return cls()
+    Docker requires absolute host paths for bind mounts; a relative path
+    silently gets interpreted as a *named volume*, which is almost never
+    what the user intended. We also expand ``~`` here.
+    """
+    p = Path(os.path.expanduser(host_path))
+    if not p.is_absolute():
+        p = (Path.cwd() / p).resolve()
+    else:
+        # ``resolve`` is a no-op on missing absolute paths in newer Python,
+        # which is what we want; just normalize.
+        p = p.resolve()
+    return str(p)
 
 
 class DockerEnv(BaseEnv):
     """Docker environment implementation.
 
-    Provides the low-level operations interface for Docker containers:
-    - Container lifecycle management
-    - Command execution
-    - File operations
-    - Tmux session management
+    Manages a single Docker container and exposes command/file primitives
+    against it. See module docstring for the design rationale.
     """
 
     def __init__(self, config: DockerEnvConfig | None = None):
         """Initialize the Docker environment.
 
         Args:
-            config: Docker environment configuration.
+            config: Docker environment configuration. Must include
+                ``session_config``.
         """
         if config is None:
             raise ValueError("DockerEnv requires DockerEnvConfig with session_config")
         super().__init__(config)
         self.config: DockerEnvConfig = config
         self._container_id: str | None = None
-        self._tmux_session: str | None = None
-        self._tmux_log_path: str | None = None
+        self._container_name: str | None = None
+        # Whether *we* should be the one to stop/remove the container at
+        # teardown time. Always False when ``use_existing_container`` is set,
+        # so that we never tear down something the user owns.
+        self._created_by_us: bool = False
+        # Stable per-env identifier used to namespace state files inside the
+        # container. Lets multiple DockerEnv instances coexist if they ever
+        # share a container.
+        self._session_uid: str = uuid.uuid4().hex[:12]
+        # Per-thread initialization state for the in-container state dir.
+        self._thread_local = threading.local()
+
+    # ------------------------------------------------------------------ #
+    # Lifecycle
+    # ------------------------------------------------------------------ #
 
     def setup(self) -> None:
-        """Initialize the Docker environment."""
+        """Initialize the Docker environment.
+
+        Verifies the docker CLI is reachable, creates or attaches to a
+        container, and seeds the per-session state directory inside it.
+        """
         if self._is_ready:
             self.logger.warning("Environment already setup")
             return
 
         self.logger.info("Setting up Docker environment")
+        self._ensure_docker_available()
         self._create_or_get_container()
-        self._setup_tmux()
+        self._initialize_container()
         self._is_ready = True
-        self.logger.info("Docker environment setup complete")
+        self.logger.info(
+            f"Docker environment ready: container={self._container_name} "
+            f"({(self._container_id or '')[:12]})"
+        )
 
     def teardown(self) -> None:
-        """Clean up Docker environment resources."""
+        """Clean up Docker environment resources.
+
+        - If we created the container and ``auto_remove`` is true: stop and
+          remove it.
+        - If we created the container but ``auto_remove`` is false: leave it
+          running so a subsequent ``open()`` call can reuse it.
+        - If we attached to an existing container (``use_existing_container``):
+          do nothing — never touch a container the user owns.
+        """
         if not self._is_ready:
             return
 
         self.logger.info("Tearing down Docker environment")
-
-        if self._container_id:
-            session_config = self.config.session_config
-            if session_config.auto_remove:
-                # Auto-remove mode: stop and remove the container
-                self.logger.info(f"Stopping and removing container: {self._container_id[:12]}")
-                try:
-                    subprocess.run(
-                        ["docker", "stop", self._container_id],
-                        capture_output=True,
-                        timeout=30,
-                    )
-                    subprocess.run(
-                        ["docker", "rm", "-f", self._container_id],
-                        capture_output=True,
-                        timeout=30,
-                    )
-                except Exception as e:
-                    self.logger.warning(f"Error stopping/removing container: {e}")
-                self._container_id = None
+        if self._container_id and self._created_by_us:
+            sc = self.config.session_config
+            if sc.auto_remove:
+                self._stop_and_remove_container()
             else:
-                # Keep-container mode: only mark as closed; container keeps running
-                self.logger.info(f"Environment closed (container {self._container_id[:12]} kept running for reuse)")
+                self.logger.info(
+                    f"Keeping container {self._container_id[:12]} running for reuse "
+                    f"(auto_remove=false)"
+                )
+        elif self._container_id:
+            self.logger.info(
+                f"Detached from existing container {self._container_id[:12]} "
+                f"(left untouched)"
+            )
 
+        # Reset thread-local init flags so a re-opened env will re-seed them.
+        self._thread_local = threading.local()
         self._is_ready = False
         self.logger.info("Docker environment teardown complete")
 
+    def _stop_and_remove_container(self) -> None:
+        """Stop and remove the container we created. Tolerant to ``--rm`` races."""
+        cid = self._container_id
+        if not cid:
+            return
+        self.logger.info(f"Stopping and removing container {cid[:12]}")
+        try:
+            subprocess.run(
+                ["docker", "stop", cid],
+                capture_output=True, text=True, timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            self.logger.warning(f"`docker stop` timed out for {cid[:12]}")
+        # If the container was started with ``--rm`` it is auto-removed once
+        # ``docker stop`` returns; the subsequent ``docker rm -f`` then exits
+        # non-zero. Treat that as success.
+        try:
+            subprocess.run(
+                ["docker", "rm", "-f", cid],
+                capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            self.logger.warning(f"`docker rm` timed out for {cid[:12]}")
+        self._container_id = None
+        self._container_name = None
+
+    # ------------------------------------------------------------------ #
+    # Container creation
+    # ------------------------------------------------------------------ #
+
+    def _ensure_docker_available(self) -> None:
+        """Raise a clear error if the docker CLI / daemon is not reachable."""
+        try:
+            r = subprocess.run(
+                ["docker", "version", "--format", "{{.Server.Version}}"],
+                capture_output=True, text=True, timeout=10,
+            )
+        except FileNotFoundError:
+            raise RuntimeError(
+                "`docker` CLI not found in PATH. Install Docker and ensure the "
+                "daemon is running before using a Docker session."
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                "Timed out talking to the docker daemon (try `docker info`)."
+            )
+        if r.returncode != 0:
+            raise RuntimeError(
+                "Docker daemon unreachable: "
+                f"{(r.stderr or r.stdout).strip() or 'unknown error'}"
+            )
+
+    def _container_running(self, ref: str) -> bool:
+        r = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", ref],
+            capture_output=True, text=True, timeout=10,
+        )
+        return r.returncode == 0 and r.stdout.strip() == "true"
+
+    def _container_exists(self, ref: str) -> bool:
+        r = subprocess.run(
+            ["docker", "inspect", "-f", "{{.Id}}", ref],
+            capture_output=True, text=True, timeout=10,
+        )
+        return r.returncode == 0 and bool(r.stdout.strip())
+
+    def _container_id_from_ref(self, ref: str) -> str | None:
+        r = subprocess.run(
+            ["docker", "inspect", "-f", "{{.Id}}", ref],
+            capture_output=True, text=True, timeout=10,
+        )
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    def _ensure_image_available(self, image: str) -> None:
+        """Pull the image if local lookup misses, per ``pull_image`` policy.
+
+        Policies (read from ``session_config.pull_image`` if present,
+        defaulting to ``"missing"``):
+
+        * ``"missing"`` (default): pull only if not present locally.
+        * ``"always"``: pull every time (useful for moving tags).
+        * ``"never"``: assume the image is already local; raise if not.
+        """
+        sc = self.config.session_config
+        policy = getattr(sc, "pull_image", "missing")
+        if policy not in {"missing", "always", "never"}:
+            self.logger.warning(
+                f"Unknown pull_image policy '{policy}'; falling back to 'missing'"
+            )
+            policy = "missing"
+
+        if policy == "always":
+            self.logger.info(f"Pulling image (policy=always): {image}")
+            r = subprocess.run(
+                ["docker", "pull", image],
+                capture_output=True, text=True, timeout=600,
+            )
+            if r.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to pull image {image}: {(r.stderr or r.stdout).strip()}"
+                )
+            return
+
+        # missing / never: check first
+        check = subprocess.run(
+            ["docker", "image", "inspect", image],
+            capture_output=True, text=True, timeout=15,
+        )
+        if check.returncode == 0:
+            return  # already present
+        if policy == "never":
+            raise RuntimeError(
+                f"Image '{image}' not present locally and pull_image='never'"
+            )
+        # missing: pull now
+        self.logger.info(f"Image not found locally; pulling: {image}")
+        r = subprocess.run(
+            ["docker", "pull", image],
+            capture_output=True, text=True, timeout=600,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"Failed to pull image {image}: {(r.stderr or r.stdout).strip()}"
+            )
+
+    def _create_or_get_container(self) -> None:
+        """Create a new container, or attach to an existing one.
+
+        Resolution order:
+
+        1. ``use_existing_container`` is set → attach (never create / remove).
+        2. ``container_name`` matches an existing container → reuse it (start
+           if stopped). We claim ownership for lifecycle purposes (the user
+           explicitly named it for us).
+        3. Otherwise create a fresh container with all the configured limits.
+        """
+        sc = self.config.session_config
+
+        # 1) Explicit attach.
+        if sc.use_existing_container:
+            ref = sc.use_existing_container
+            if not self._container_exists(ref):
+                raise RuntimeError(
+                    f"use_existing_container='{ref}' does not exist."
+                )
+            if not self._container_running(ref):
+                self.logger.info(f"Starting existing container {ref}")
+                r = subprocess.run(
+                    ["docker", "start", ref],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if r.returncode != 0:
+                    raise RuntimeError(
+                        f"Failed to start container '{ref}': {(r.stderr or r.stdout).strip()}"
+                    )
+            self._container_id = self._container_id_from_ref(ref)
+            self._container_name = ref
+            self._created_by_us = False
+            return
+
+        # 2) Named container reuse.
+        container_name = sc.container_name or (
+            f"evomaster-{os.getpid()}-{int(time.time())}-{self._session_uid}"
+        )
+        if sc.container_name and self._container_exists(container_name):
+            self.logger.info(
+                f"Found existing container '{container_name}'; reusing it. "
+                f"Note: image / volume / env_vars settings in the current "
+                f"config are ignored when reusing."
+            )
+            if not self._container_running(container_name):
+                r = subprocess.run(
+                    ["docker", "start", container_name],
+                    capture_output=True, text=True, timeout=60,
+                )
+                if r.returncode != 0:
+                    raise RuntimeError(
+                        f"Failed to start container '{container_name}': "
+                        f"{(r.stderr or r.stdout).strip()}"
+                    )
+            self._container_id = self._container_id_from_ref(container_name)
+            self._container_name = container_name
+            # The user named this for us -> we own its lifecycle.
+            self._created_by_us = True
+            return
+
+        # 3) Fresh container.
+        self._ensure_image_available(sc.image)
+
+        cmd: list[str] = ["docker", "run", "-d", "--name", container_name]
+
+        # Resource limits (only emit flags when set, so users can disable
+        # them by setting an empty value or zero).
+        if sc.memory_limit:
+            cmd.extend(["--memory", str(sc.memory_limit)])
+        if sc.cpu_limit and float(sc.cpu_limit) > 0:
+            cmd.extend(["--cpus", str(sc.cpu_limit)])
+
+        # GPU: ``--gpus`` syntax differs by spec; we normalize a few common
+        # forms from YAML.
+        gpu = sc.gpu_devices
+        if gpu is not None:
+            if isinstance(gpu, str):
+                low = gpu.strip().lower()
+                if low == "all":
+                    cmd.extend(["--gpus", "all"])
+                elif low in ("", "none", "null"):
+                    pass  # explicitly disabled
+                else:
+                    cmd.extend(["--gpus", f'"device={gpu}"'])
+            elif isinstance(gpu, (list, tuple)) and gpu:
+                devices = ",".join(str(g) for g in gpu)
+                cmd.extend(["--gpus", f'"device={devices}"'])
+
+        # Network mode.
+        if sc.network_mode:
+            cmd.extend(["--network", str(sc.network_mode)])
+
+        # Working directory inside the container.
+        cmd.extend(["-w", sc.working_dir])
+
+        # Volumes (resolve relative host paths to absolute and create them).
+        for host_path, container_path in (sc.volumes or {}).items():
+            resolved = _resolve_host_path(host_path)
+            try:
+                Path(resolved).mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                self.logger.warning(
+                    f"Could not create host volume path {resolved}: {e}"
+                )
+            cmd.extend(["-v", f"{resolved}:{container_path}"])
+
+        # Environment variables.
+        for key, value in (sc.env_vars or {}).items():
+            cmd.extend(["-e", f"{key}={value}"])
+
+        # Auto-remove: pair ``--rm`` with the runtime auto_remove flag.
+        if sc.auto_remove:
+            cmd.append("--rm")
+
+        # Image and a long-lived no-op so the container stays up between
+        # docker exec calls.
+        cmd.extend([sc.image, "tail", "-f", "/dev/null"])
+
+        self.logger.info(
+            "Starting container: "
+            + " ".join(shlex.quote(c) for c in cmd)
+        )
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"Failed to start container: {(r.stderr or r.stdout).strip()}"
+            )
+        self._container_id = r.stdout.strip()
+        self._container_name = container_name
+        self._created_by_us = True
+        self.logger.info(
+            f"Container started: {self._container_name} "
+            f"({self._container_id[:12]})"
+        )
+
+    def _initialize_container(self) -> None:
+        """One-time setup inside the container after it starts.
+
+        Ensures ``working_dir`` exists and is writable, and creates the
+        per-session state directory we use for cwd persistence.
+        """
+        sc = self.config.session_config
+        wd = shlex.quote(sc.working_dir)
+        # ``|| true`` because some images have read-only or already-set perms
+        # that we don't want to fail the whole setup over.
+        self.docker_exec(
+            f"mkdir -p {wd} && chmod -R u+rwx {wd} 2>/dev/null || true",
+            timeout=30,
+        )
+        # Seed the main thread's state dir; per-thread dirs are created
+        # lazily on first ``exec_bash_stateful`` call.
+        self._ensure_thread_state()
+
+    # ------------------------------------------------------------------ #
+    # Required abstract members
+    # ------------------------------------------------------------------ #
+
     def get_session(self) -> Any:
-        """Get a Session (DockerEnv does not provide Sessions directly; managed by the caller)."""
+        """DockerEnv does not provide a Session directly; the Session class
+        owns this Env instance, not the other way around."""
         raise NotImplementedError("DockerEnv does not provide session directly")
 
-    def submit_job(
-        self,
-        command: str,
-        job_type: str = "debug",
-        **kwargs: Any,
-    ) -> str:
-        """Submit a job (DockerEnv does not support job scheduling directly)."""
+    def submit_job(self, command: str, job_type: str = "debug", **kwargs: Any) -> str:
         raise NotImplementedError("DockerEnv does not support job submission")
 
     def get_job_status(self, job_id: str) -> dict[str, Any]:
-        """Query job status (DockerEnv does not support job scheduling directly)."""
         raise NotImplementedError("DockerEnv does not support job status")
 
     def cancel_job(self, job_id: str) -> None:
-        """Cancel a job (DockerEnv does not support job scheduling directly)."""
         raise NotImplementedError("DockerEnv does not support job cancellation")
 
     @property
     def container_id(self) -> str | None:
-        """Get the container ID."""
+        """Active container id (full hash), or None if not yet started."""
         return self._container_id
 
-    def _create_or_get_container(self) -> None:
-        """Create or obtain a Docker container."""
-        session_config = self.config.session_config
+    @property
+    def container_name(self) -> str | None:
+        return self._container_name
 
-        # If container ID already exists (previously opened then closed), check container status
-        if self._container_id:
-            # Check if the container is still running
-            result = subprocess.run(
-                ["docker", "ps", "--filter", f"id={self._container_id}", "--format", "{{.ID}}"],
-                capture_output=True,
-                text=True,
+    # ------------------------------------------------------------------ #
+    # Per-thread state for cwd persistence
+    # ------------------------------------------------------------------ #
+
+    def _state_dir_for_thread(self) -> str:
+        """Path inside the container to the current thread's state dir."""
+        tid = threading.get_ident()
+        return f"/tmp/evomaster_session_{self._session_uid}/thread_{tid}"
+
+    def _ensure_thread_state(self) -> str:
+        """Create the per-thread state dir on first use; cache the path."""
+        if not getattr(self._thread_local, "initialized", False):
+            d = self._state_dir_for_thread()
+            sc = self.config.session_config
+            # Seed cwd with the configured working_dir so the first command
+            # starts in a predictable place even if the user didn't ``cd``.
+            self.docker_exec(
+                f"mkdir -p {shlex.quote(d)} && "
+                f"echo {shlex.quote(sc.working_dir)} > {shlex.quote(d)}/cwd",
                 timeout=10,
             )
-            if result.returncode == 0 and result.stdout.strip():
-                # Container is running; reuse it
-                self.logger.info(f"Reusing existing running container: {self._container_id[:12]}")
-                return
-            else:
-                # Container is stopped; try to start it
-                self.logger.info(f"Starting existing stopped container: {self._container_id[:12]}")
-                try:
-                    result = subprocess.run(
-                        ["docker", "start", self._container_id],
-                        capture_output=True,
-                        text=True,
-                        timeout=30,
-                    )
-                    if result.returncode == 0:
-                        # Wait for the container to fully start
-                        time.sleep(1)
-                        return
-                    else:
-                        self.logger.warning(f"Failed to start container: {result.stderr}")
-                        # Continue to create a new container
-                        self._container_id = None
-                except Exception as e:
-                    self.logger.warning(f"Error starting container: {e}")
-                    # Continue to create a new container
-                    self._container_id = None
+            self._thread_local.initialized = True
+            self._thread_local.state_dir = d
+        return self._thread_local.state_dir
 
-        # If configured to use an existing container
-        if session_config.use_existing_container:
-            self.logger.info(f"Using existing container: {session_config.use_existing_container}")
-            # Check if the container exists and is running
-            result = subprocess.run(
-                ["docker", "ps", "--filter", f"name={session_config.use_existing_container}", "--format", "{{.ID}}"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                self._container_id = result.stdout.strip()
-                self.logger.info(f"Found running container: {self._container_id[:12]}")
-            else:
-                # Try to find a stopped container
-                result = subprocess.run(
-                    ["docker", "ps", "-a", "--filter", f"name={session_config.use_existing_container}", "--format", "{{.ID}}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    container_id = result.stdout.strip()
-                    # Start the container
-                    subprocess.run(
-                        ["docker", "start", container_id],
-                        capture_output=True,
-                        timeout=30,
-                    )
-                    self._container_id = container_id
-                    self.logger.info(f"Started existing container: {self._container_id[:12]}")
-                else:
-                    raise RuntimeError(f"Container '{session_config.use_existing_container}' not found")
-            return
-
-        self.logger.info(f"Starting Docker container with image: {session_config.image}")
-
-        # Container name
-        container_name = session_config.container_name or f"evomaster-{os.getpid()}-{int(time.time())}"
-
-        # If a container name is specified, check if the container already exists
-        if session_config.container_name:
-            result = subprocess.run(
-                ["docker", "ps", "-a", "--filter", f"name={container_name}", "--format", "{{.ID}}"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                container_id = result.stdout.strip()
-                # Container already exists; check if it is running
-                result_running = subprocess.run(
-                    ["docker", "ps", "--filter", f"id={container_id}", "--format", "{{.ID}}"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-                if result_running.returncode == 0 and result_running.stdout.strip():
-                    # Container is running; reuse it
-                    self.logger.info(f"Reusing existing running container: {container_id[:12]}")
-                    self._container_id = container_id
-                    return
-                else:
-                    # Container is stopped; start it
-                    self.logger.info(f"Starting existing stopped container: {container_id[:12]}")
-                    subprocess.run(
-                        ["docker", "start", container_id],
-                        capture_output=True,
-                        timeout=30,
-                    )
-                    time.sleep(1)
-                    self._container_id = container_id
-                    return
-
-        # Build docker run command
-        cmd = ["docker", "run", "-d"]
-        cmd.extend(["--name", container_name])
-
-        # Resource limits
-        cmd.extend(["--memory", session_config.memory_limit])
-        cmd.extend(["--cpus", str(session_config.cpu_limit)])
-
-        # GPU devices
-        if session_config.gpu_devices is not None:
-            if isinstance(session_config.gpu_devices, str):
-                if session_config.gpu_devices.lower() == "all":
-                    cmd.extend(["--gpus", "all"])
-                else:
-                    cmd.extend(["--gpus", f"device={session_config.gpu_devices}"])
-            elif isinstance(session_config.gpu_devices, list):
-                devices_str = ",".join(session_config.gpu_devices)
-                cmd.extend(["--gpus", f"device={devices_str}"])
-
-        # Network
-        cmd.extend(["--network", session_config.network_mode])
-
-        # Working directory
-        cmd.extend(["-w", session_config.working_dir])
-
-        # Volume mounts
-        for host_path, container_path in session_config.volumes.items():
-            cmd.extend(["-v", f"{host_path}:{container_path}"])
-
-        # Environment variables
-        for key, value in session_config.env_vars.items():
-            cmd.extend(["-e", f"{key}={value}"])
-
-        # Auto-remove
-        if session_config.auto_remove:
-            cmd.append("--rm")
-
-        # Image and command (use tail -f to keep the container running)
-        cmd.extend([session_config.image, "tail", "-f", "/dev/null"])
-
-        try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-
-            if result.returncode != 0:
-                raise RuntimeError(f"Failed to start container: {result.stderr}")
-
-            self._container_id = result.stdout.strip()
-            self.logger.info(f"Container started: {self._container_id[:12]}")
-
-            # Initialize workspace directory permissions to ensure files can be written
-            try:
-                self.docker_exec(f"mkdir -p {session_config.working_dir} && chmod 777 {session_config.working_dir}")
-            except Exception as e:
-                self.logger.warning(f"Failed to initialize workspace directory: {e}")
-
-        except subprocess.TimeoutExpired:
-            raise RuntimeError("Timeout starting Docker container")
-        except Exception as e:
-            self.logger.error(f"Failed to start Docker container: {e}")
-            raise
-
-    def _setup_tmux(self) -> None:
-        """Set up the tmux session."""
-        if not self._container_id:
-            raise RuntimeError("Container not started")
-
-        session_name = f"evo-{self._container_id[:8]}"
-        log_path = f"/tmp/evo-{self._container_id[:8]}.log"
-
-        self._tmux_session = session_name
-        self._tmux_log_path = log_path
-
-        # Install tmux (if needed)
-        self.docker_exec("apt-get update && apt-get install -y tmux || true", timeout=120)
-
-        # Create tmux session
-        self.docker_exec(f"tmux new-session -d -s {session_name} 'bash -i'")
-
-        # Set up pipe logging
-        self.docker_exec(f"tmux pipe-pane -o -t {session_name} 'cat >> {log_path}'")
-
-        # Set PS1 prompt
-        ps1 = BashMetadata.to_ps1_prompt()
-        init_cmd = f"PROMPT_COMMAND='PS1=\"{ps1}\"'"
-        self.tmux_send_keys(init_cmd, enter=True)
-
-        # Trigger the first prompt
-        self.tmux_send_keys("", enter=True)
-        time.sleep(0.5)
-
-        self.logger.debug(f"Tmux session {session_name} initialized")
+    # ------------------------------------------------------------------ #
+    # Command execution
+    # ------------------------------------------------------------------ #
 
     def docker_exec(
         self,
         command: str,
         timeout: int | None = None,
         workdir: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Execute a command in the container (direct execution, not via tmux).
+        """Run a single shell command inside the container via ``docker exec``.
 
-        Args:
-            command: Command to execute.
-            timeout: Timeout in seconds.
-            workdir: Working directory.
-
-        Returns:
-            Result dictionary containing:
-            - stdout: Standard output
-            - stderr: Standard error
-            - exit_code: Exit code
-            - output: Combined stdout + stderr
+        Low-level primitive: it does *not* persist working directory or any
+        other state between calls. Most callers want
+        :meth:`exec_bash_stateful` instead.
         """
         if not self._container_id:
             raise RuntimeError("Container not started")
 
         timeout = timeout or self.config.session_config.timeout
-
-        cmd = ["docker", "exec"]
+        cmd: list[str] = ["docker", "exec"]
         if workdir:
             cmd.extend(["-w", workdir])
+        for k, v in (env or {}).items():
+            cmd.extend(["-e", f"{k}={v}"])
         cmd.extend([self._container_id, "bash", "-c", command])
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
             return {
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "exit_code": result.returncode,
-                "output": result.stdout + result.stderr,
+                "stdout": r.stdout,
+                "stderr": r.stderr,
+                "exit_code": r.returncode,
+                "output": r.stdout + r.stderr,
             }
         except subprocess.TimeoutExpired:
             return {
@@ -434,306 +546,290 @@ class DockerEnv(BaseEnv):
                 "output": f"Command timed out after {timeout}s",
             }
 
-    def tmux_send_keys(self, keys: str, enter: bool = False) -> None:
-        """Send keys to the tmux session.
+    def exec_bash_stateful(
+        self,
+        command: str,
+        timeout: int | None = None,
+    ) -> dict[str, Any]:
+        """Run a bash command, persisting the working directory across calls.
 
-        Args:
-            keys: Keys to send.
-            enter: Whether to press Enter.
+        The command is wrapped so that:
+
+        1. The shell ``cd``s into the cwd recorded by the previous call (or
+           the configured ``working_dir`` on first use).
+        2. The user command runs in a brace block (so ``set -e`` etc. inside
+           do not abort the wrapper itself).
+        3. After the command, the new ``pwd`` is written back to the state
+           file, and a marker line carrying the exit code and pwd is printed
+           on its own stdout line so the caller can parse it back.
+
+        Returns the standard session result dict
+        (``stdout`` / ``stderr`` / ``exit_code`` / ``working_dir`` / ``output``).
         """
-        if not self._tmux_session:
-            raise RuntimeError("Tmux session not initialized")
+        if not self._container_id:
+            raise RuntimeError("Container not started")
 
-        # Escape single quotes
-        escaped = keys.replace("'", "'\\''")
-        cmd = f"tmux send-keys -t {self._tmux_session} '{escaped}'"
-        if enter:
-            cmd += " C-m"
+        state_dir = self._ensure_thread_state()
+        cwd_file = f"{state_dir}/cwd"
+        sc = self.config.session_config
+        default_cwd = sc.working_dir
 
-        self.docker_exec(cmd)
+        # We embed the user's command verbatim in a brace block. Newlines in
+        # the user command are fine — ``bash -c`` accepts a multi-line script
+        # as the first arg.
+        wrapper = (
+            "set +e\n"
+            f'__cwd="$(cat {shlex.quote(cwd_file)} 2>/dev/null)"\n'
+            f'[ -z "$__cwd" ] && __cwd={shlex.quote(default_cwd)}\n'
+            f'cd "$__cwd" 2>/dev/null || cd {shlex.quote(default_cwd)}\n'
+            "{\n"
+            f"{command}\n"
+            "}\n"
+            "__exit=$?\n"
+            f"pwd > {shlex.quote(cwd_file)} 2>/dev/null || true\n"
+            f'printf "\\n%s exit=%s pwd=%s\\n" '
+            f'{shlex.quote(_EVO_MARKER)} "$__exit" "$(pwd)"\n'
+            "exit $__exit\n"
+        )
 
-    def get_tmux_logs(self) -> str:
-        """Get the tmux session logs.
+        result = self.docker_exec(wrapper, timeout=timeout)
+        stdout = result["stdout"]
+        stderr = result["stderr"]
+        exit_code = result["exit_code"]
+        working_dir = default_cwd
 
-        Returns:
-            Tmux log content.
-        """
-        if not self._tmux_log_path:
-            return ""
+        # Strip the marker line and recover exit code + cwd from it.
+        marker_idx = stdout.rfind(_EVO_MARKER)
+        if marker_idx != -1:
+            # Marker line goes from marker_idx to the next newline.
+            tail = stdout[marker_idx:]
+            marker_line, _, _ = tail.partition("\n")
+            stdout_clean = stdout[:marker_idx].rstrip("\n")
+            try:
+                rest = marker_line[len(_EVO_MARKER):].strip()
+                # Format: ``exit=<n> pwd=<dir>``
+                exit_part, _, pwd_part = rest.partition(" pwd=")
+                if exit_part.startswith("exit="):
+                    exit_code = int(exit_part[len("exit="):])
+                if pwd_part:
+                    working_dir = pwd_part.strip()
+            except Exception:
+                # Marker present but malformed — fall through with the raw
+                # docker_exec values.
+                pass
+        else:
+            # No marker: timeout or hard-killed. Keep the stored cwd so that
+            # the next call still starts somewhere sensible.
+            stdout_clean = stdout
 
-        result = self.docker_exec(f"cat {self._tmux_log_path} 2>/dev/null || echo ''")
-        return result.get("stdout", "")
+        # Combine for the ``output`` convenience field used by callers that
+        # don't separate stdout/stderr.
+        combined = stdout_clean
+        if stderr:
+            combined = (combined + "\n" + stderr) if combined else stderr
+
+        return {
+            "stdout": stdout_clean,
+            "stderr": stderr,
+            "exit_code": exit_code,
+            "working_dir": working_dir,
+            "output": combined,
+        }
+
+    # ------------------------------------------------------------------ #
+    # Volume helpers
+    # ------------------------------------------------------------------ #
 
     def is_mounted_path(self, container_path: str) -> tuple[bool, str | None]:
-        """Check if the path is within a mounted volume.
+        """Check whether ``container_path`` lives inside one of our bind mounts.
 
-        Args:
-            container_path: Path inside the container (should be an absolute path).
-
-        Returns:
-            (is_mounted, host_path): Whether the path is in a mounted volume,
-            and the corresponding host path (if it exists).
+        Returns ``(is_mounted, host_path)``: when ``True``, ``host_path`` is
+        the corresponding absolute path on the host, which lets file I/O
+        bypass ``docker cp`` for a big speedup on large files.
         """
-        session_config = self.config.session_config
-        if not session_config.volumes:
+        sc = self.config.session_config
+        if not sc.volumes:
             return False, None
-
-        # Normalize the container path (ensure it is absolute, remove trailing slash)
-        container_path = str(Path(container_path).as_posix())
-        if not container_path.startswith("/"):
-            # If not an absolute path, it may need resolution first, but here we assume it is absolute
-            # If it is not, return False
+        cp = str(Path(container_path).as_posix())
+        if not cp.startswith("/"):
             return False, None
-
-        # Check each mounted volume
-        for host_path, mount_point in session_config.volumes.items():
-            # Normalize the mount point path
-            mount_point_norm = str(Path(mount_point).as_posix())
-
-            # Check if the container path starts with the mount point
-            # Ensure exact matching (avoid /workspace matching /workspace2)
-            if container_path == mount_point_norm:
-                # Exact match with the mount point itself
-                return True, str(Path(host_path))
-            elif container_path.startswith(mount_point_norm + "/"):
-                # Is a sub-path of the mount point
-                # Compute the relative path
-                relative_path = container_path[len(mount_point_norm):].lstrip("/")
-                # Build the host path
-                host_path_obj = Path(host_path) / relative_path
-                return True, str(host_path_obj)
-
+        # Walk volumes longest mount-point first so nested mounts win.
+        for host_path, mount_point in sorted(
+            sc.volumes.items(), key=lambda kv: len(kv[1]), reverse=True
+        ):
+            mp = str(Path(mount_point).as_posix()).rstrip("/")
+            if not mp:
+                continue
+            if cp == mp:
+                return True, _resolve_host_path(host_path)
+            if cp.startswith(mp + "/"):
+                rel = cp[len(mp) + 1:]
+                return True, str(Path(_resolve_host_path(host_path)) / rel)
         return False, None
 
+    # ------------------------------------------------------------------ #
+    # File I/O
+    # ------------------------------------------------------------------ #
+
     def upload_file(self, local_path: str, remote_path: str) -> None:
-        """Upload a file to the container.
+        """Upload a file (or directory) into the container.
 
-        If the target path is within a mounted volume, copies the file directly on the host.
-
-        Args:
-            local_path: Local file path.
-            remote_path: Remote file path (path inside the container).
+        If ``remote_path`` is inside a bind mount, the file is copied on the
+        host directly; otherwise ``docker cp`` is used.
         """
         if not self._container_id:
             raise RuntimeError("Container not started")
 
-        # Check if the path is within a mounted volume
         is_mounted, host_path = self.is_mounted_path(remote_path)
-
         if is_mounted and host_path:
-            # Copy the file directly on the host
             try:
-                import shutil
-
-                # Ensure the target directory exists
-                host_path_obj = Path(host_path)
-                host_path_obj.parent.mkdir(parents=True, exist_ok=True)
-
-                # Copy the file
-                shutil.copy2(local_path, host_path)
+                Path(host_path).parent.mkdir(parents=True, exist_ok=True)
+                if Path(local_path).is_dir():
+                    if Path(host_path).exists():
+                        shutil.rmtree(host_path)
+                    shutil.copytree(local_path, host_path)
+                else:
+                    shutil.copy2(local_path, host_path)
             except Exception as e:
-                raise RuntimeError(f"Failed to upload file {local_path} to host path {host_path}: {e}")
+                raise RuntimeError(
+                    f"Failed to upload {local_path} -> host path {host_path}: {e}"
+                )
             return
 
-        # Not in a mounted volume; use docker cp
-        # Ensure the remote directory exists and has correct permissions
+        # docker cp path: ensure remote dir exists and is writable.
         remote_dir = str(Path(remote_path).parent)
-        # Create the directory and set permissions (777 ensures all users can write)
-        self.docker_exec(f"mkdir -p {remote_dir} && chmod 777 {remote_dir}")
-
-        cmd = ["docker", "cp", local_path, f"{self._container_id}:{remote_path}"]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        if result.returncode != 0:
-            raise RuntimeError(f"Failed to upload file: {result.stderr}")
-
-        # Set file permissions after upload to ensure read/write/execute access
-        self.docker_exec(f"chmod 777 {remote_path}")
+        self.docker_exec(
+            f"mkdir -p {shlex.quote(remote_dir)} && "
+            f"chmod 777 {shlex.quote(remote_dir)} 2>/dev/null || true",
+            timeout=30,
+        )
+        r = subprocess.run(
+            ["docker", "cp", local_path, f"{self._container_id}:{remote_path}"],
+            capture_output=True, text=True, timeout=120,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(
+                f"docker cp failed: {(r.stderr or r.stdout).strip()}"
+            )
+        # Best-effort permission fix so the in-container user can read.
+        self.docker_exec(
+            f"chmod 666 {shlex.quote(remote_path)} 2>/dev/null || true",
+            timeout=10,
+        )
 
     def download_file(self, remote_path: str, timeout: int | None = None) -> bytes:
-        """Download a file from the container.
-
-        If the path is within a mounted volume, reads directly from the host.
-
-        Args:
-            remote_path: Remote file path (path inside the container).
-            timeout: Timeout in seconds.
-
-        Returns:
-            File content (bytes).
-        """
+        """Read a single file out of the container as raw bytes."""
         if not self._container_id:
             raise RuntimeError("Container not started")
 
-        # Check if the path is within a mounted volume
         is_mounted, host_path = self.is_mounted_path(remote_path)
-
         if is_mounted and host_path:
-            # Read directly from the host
+            if os.path.isdir(host_path):
+                raise RuntimeError(
+                    f"Cannot download a directory: {remote_path}. "
+                    f"Use exec_bash to inspect its contents."
+                )
             try:
-                # Check if it is a directory
-                if os.path.isdir(host_path):
-                    raise RuntimeError(f"Cannot download directory: {remote_path}. Use exec_bash to list directory contents instead.")
-
                 with open(host_path, "rb") as f:
                     return f.read()
             except FileNotFoundError:
-                raise RuntimeError(f"File not found: {remote_path} (host path: {host_path})")
-            except Exception as e:
-                raise RuntimeError(f"Failed to download file {remote_path} from host: {e}")
+                raise RuntimeError(
+                    f"File not found: {remote_path} (host: {host_path})"
+                )
 
-        # Not in a mounted volume; use docker cp
-        # Check if the path is a directory; docker cp cannot copy directories
         if self.is_directory(remote_path):
-            raise RuntimeError(f"Cannot download directory: {remote_path}. Use exec_bash to list directory contents instead.")
+            raise RuntimeError(
+                f"Cannot download a directory: {remote_path}. "
+                f"Use exec_bash to inspect its contents."
+            )
 
         timeout = timeout or 60
-
-        with tempfile.NamedTemporaryFile(delete=False) as f:
-            temp_path = f.name
-
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp_path = tmp.name
         try:
-            cmd = ["docker", "cp", f"{self._container_id}:{remote_path}", temp_path]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-
-            if result.returncode != 0:
-                # Check if the error message contains a directory-related error
-                error_msg = result.stderr.strip()
-                if "cannot copy directory" in error_msg.lower() or "is a directory" in error_msg.lower():
-                    raise RuntimeError(f"Cannot download directory: {remote_path}. Use exec_bash to list directory contents instead.")
-                raise RuntimeError(f"Failed to download file: {error_msg}")
-
-            with open(temp_path, "rb") as f:
+            r = subprocess.run(
+                ["docker", "cp", f"{self._container_id}:{remote_path}", tmp_path],
+                capture_output=True, text=True, timeout=timeout,
+            )
+            if r.returncode != 0:
+                err = (r.stderr or r.stdout).strip()
+                if "is a directory" in err.lower() or "cannot copy directory" in err.lower():
+                    raise RuntimeError(
+                        f"Cannot download a directory: {remote_path}."
+                    )
+                raise RuntimeError(f"docker cp failed: {err}")
+            with open(tmp_path, "rb") as f:
                 return f.read()
         finally:
-            if os.path.exists(temp_path):
-                os.unlink(temp_path)
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
 
     def read_file_content(self, remote_path: str, encoding: str = "utf-8") -> str:
-        """Read remote file content (text).
-
-        If the path is within a mounted volume, reads directly from the host.
-
-        Args:
-            remote_path: Remote file path (path inside the container).
-            encoding: File encoding.
-
-        Returns:
-            File content (string).
-        """
+        """Convenience: read a text file out of the container."""
         is_mounted, host_path = self.is_mounted_path(remote_path)
-
         if is_mounted and host_path:
-            # Read directly from the host
             try:
                 with open(host_path, "r", encoding=encoding) as f:
                     return f.read()
             except FileNotFoundError:
-                raise RuntimeError(f"File not found: {remote_path} (host path: {host_path})")
-            except Exception as e:
-                raise RuntimeError(f"Failed to read file {remote_path} from host: {e}")
-
-        # Not in a mounted volume; use download_file
-        content = self.download_file(remote_path)
-        return content.decode(encoding)
+                raise RuntimeError(
+                    f"File not found: {remote_path} (host: {host_path})"
+                )
+        return self.download_file(remote_path).decode(encoding)
 
     def write_file_content(self, remote_path: str, content: str, encoding: str = "utf-8") -> None:
-        """Write content to a remote file.
-
-        If the path is within a mounted volume, writes directly on the host.
-
-        Args:
-            remote_path: Remote file path (path inside the container).
-            content: File content.
-            encoding: File encoding.
-        """
+        """Convenience: write text content into a file inside the container."""
         is_mounted, host_path = self.is_mounted_path(remote_path)
-
         if is_mounted and host_path:
-            # Write directly on the host
             try:
-                # Ensure the directory exists
-                host_path_obj = Path(host_path)
-                host_path_obj.parent.mkdir(parents=True, exist_ok=True)
-
-                # Write the file
+                Path(host_path).parent.mkdir(parents=True, exist_ok=True)
                 with open(host_path, "w", encoding=encoding) as f:
                     f.write(content)
             except Exception as e:
-                raise RuntimeError(f"Failed to write file {remote_path} to host: {e}")
+                raise RuntimeError(
+                    f"Failed to write file {remote_path} (host: {host_path}): {e}"
+                )
             return
 
-        # Not in a mounted volume; use upload_file
-        import tempfile
-        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as f:
-            f.write(content.encode(encoding))
-            temp_path = f.name
-
+        with tempfile.NamedTemporaryFile(mode="wb", delete=False) as tmp:
+            tmp.write(content.encode(encoding))
+            tmp_path = tmp.name
         try:
-            self.upload_file(temp_path, remote_path)
+            self.upload_file(tmp_path, remote_path)
         finally:
-            os.unlink(temp_path)
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+
+    # ------------------------------------------------------------------ #
+    # Path predicates
+    # ------------------------------------------------------------------ #
 
     def path_exists(self, remote_path: str) -> bool:
-        """Check if a remote path exists.
-
-        If the path is within a mounted volume, checks directly on the host.
-
-        Args:
-            remote_path: Remote path (path inside the container).
-
-        Returns:
-            Whether the path exists.
-        """
         is_mounted, host_path = self.is_mounted_path(remote_path)
-
         if is_mounted and host_path:
             return os.path.exists(host_path)
-
-        # Not in a mounted volume; use docker exec
-        result = self.docker_exec(f'test -e "{remote_path}" && echo "exists" || echo "not_exists"')
-        stdout = result.get("stdout", "").strip()
-        return stdout == "exists"
+        r = self.docker_exec(
+            f'test -e {shlex.quote(remote_path)} && echo exists || echo no',
+            timeout=10,
+        )
+        return r["stdout"].strip() == "exists"
 
     def is_file(self, remote_path: str) -> bool:
-        """Check if a remote path is a file.
-
-        If the path is within a mounted volume, checks directly on the host.
-
-        Args:
-            remote_path: Remote path (path inside the container).
-
-        Returns:
-            Whether the path is a file.
-        """
         is_mounted, host_path = self.is_mounted_path(remote_path)
-
         if is_mounted and host_path:
             return os.path.isfile(host_path)
-
-        # Not in a mounted volume; use docker exec
-        result = self.docker_exec(f'test -f "{remote_path}" && echo "file" || echo "not_file"')
-        stdout = result.get("stdout", "").strip()
-        return stdout == "file"
+        r = self.docker_exec(
+            f'test -f {shlex.quote(remote_path)} && echo file || echo no',
+            timeout=10,
+        )
+        return r["stdout"].strip() == "file"
 
     def is_directory(self, remote_path: str) -> bool:
-        """Check if a remote path is a directory.
-
-        If the path is within a mounted volume, checks directly on the host.
-
-        Args:
-            remote_path: Remote path (path inside the container).
-
-        Returns:
-            Whether the path is a directory.
-        """
         is_mounted, host_path = self.is_mounted_path(remote_path)
-
         if is_mounted and host_path:
             return os.path.isdir(host_path)
-
-        # Not in a mounted volume; use docker exec
-        result = self.docker_exec(f'test -d "{remote_path}" && echo "dir" || echo "not_dir"')
-        stdout = result.get("stdout", "").strip()
-        return stdout == "dir"
-
+        r = self.docker_exec(
+            f'test -d {shlex.quote(remote_path)} && echo dir || echo no',
+            timeout=10,
+        )
+        return r["stdout"].strip() == "dir"

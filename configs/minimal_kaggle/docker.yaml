@@ -1,0 +1,171 @@
+# Minimal Kaggle Playground — Docker session configuration
+# Multi-agent ML pipeline (draft / debug / improve / research / metric /
+# knowledge_promotion) running inside a Docker container.
+# Run with:
+#   python run.py --agent minimal_kaggle --config configs/minimal_kaggle/docker.yaml \
+#       --task playground/minimal_kaggle/data/public/description.md
+
+# ============================================
+# LLM Configuration
+# ============================================
+llm:
+  openai:
+    provider: "openai"
+    model: "${GPT_CHAT_MODEL}"
+    api_key: "${OPENAI_API_KEY}"
+    base_url: "${GPT_BASE_URL}"
+    temperature: 0.7
+    max_tokens: 16384
+    timeout: 60
+    max_retries: 3
+    retry_delay: 1.0
+
+  anthropic:
+    provider: "anthropic"
+    model: "claude-haiku-4-5-20251001"
+    api_key: "${ANTHROPIC_API_KEY}"
+    base_url: "${ANTHROPIC_BASE_URL}"
+    temperature: 0.7
+    max_tokens: 16384
+    timeout: 60
+    max_retries: 3
+    retry_delay: 1.0
+
+  local_sglang:
+    provider: "deepseek"
+    model: "deepseek-v3.2"
+    api_key: "${DEEPSEEK_API_KEY}"
+    base_url: "${DEEPSEEK_API_BASE}"
+    temperature: 0.7
+    max_tokens: 16384
+    timeout: 300
+    max_retries: 3
+    retry_delay: 1.0
+
+  default: "local_sglang"
+
+# ============================================
+# Agent Configuration
+# ============================================
+agents:
+  draft:
+    llm: "local_sglang"
+    max_turns: 10
+    tools:
+      builtin: []
+    context:
+      max_tokens: 128000
+      truncation_strategy: "latest_half"
+      preserve_system_messages: true
+      preserve_recent_turns: 5
+    system_prompt_file: "prompts/draft_system_prompt.txt"
+    user_prompt_file: "prompts/draft_user_prompt.txt"
+
+  debug:
+    llm: "local_sglang"
+    max_turns: 10
+    tools:
+      builtin: []
+    context:
+      max_tokens: 128000
+      truncation_strategy: "latest_half"
+      preserve_system_messages: true
+      preserve_recent_turns: 5
+    system_prompt_file: "prompts/debug_system_prompt.txt"
+    user_prompt_file: "prompts/debug_user_prompt.txt"
+
+  improve:
+    llm: "local_sglang"
+    max_turns: 10
+    tools:
+      builtin: []
+    context:
+      max_tokens: 128000
+      truncation_strategy: "latest_half"
+      preserve_system_messages: true
+      preserve_recent_turns: 5
+    system_prompt_file: "prompts/improve_system_prompt.txt"
+    user_prompt_file: "prompts/improve_user_prompt.txt"
+
+  reseach:
+    llm: "local_sglang"
+    max_turns: 10
+    tools:
+      builtin: []
+    context:
+      max_tokens: 128000
+      truncation_strategy: "latest_half"
+      preserve_system_messages: true
+      preserve_recent_turns: 5
+    system_prompt_file: "prompts/reseach_system_prompt.txt"
+    user_prompt_file: "prompts/reseach_user_prompt.txt"
+
+  knowledge_promotion:
+    llm: "local_sglang"
+    max_turns: 10
+    tools:
+      builtin: []
+    context:
+      max_tokens: 128000
+      truncation_strategy: "latest_half"
+      preserve_system_messages: true
+      preserve_recent_turns: 5
+    system_prompt_file: "prompts/knowledge_promotion_system_prompt.txt"
+    user_prompt_file: "prompts/knowledge_promotion_user_prompt.txt"
+
+  metric:
+    llm: "local_sglang"
+    max_turns: 50
+    tools:
+      builtin: []
+    context:
+      max_tokens: 128000
+      truncation_strategy: "latest_half"
+      preserve_system_messages: true
+      preserve_recent_turns: 5
+    system_prompt_file: "prompts/metric_system_prompt.txt"
+    user_prompt_file: "prompts/metric_user_prompt.txt"
+
+# ============================================
+# Session Configuration
+# ============================================
+session:
+  type: "docker"
+
+  docker:
+    # Use a richer image (e.g. evomaster/base:latest) if you have one with
+    # numpy / pandas / scikit-learn pre-installed; the agent will otherwise
+    # need to `pip install` packages on first use.
+    image: "python:3.11"
+
+    container_name: null
+    use_existing_container: null
+
+    working_dir: "/workspace"
+
+    memory_limit: "16g"
+    cpu_limit: 8.0
+    gpu_devices: null
+    network_mode: "bridge"
+
+    # Mount the kaggle competition input data into the container at
+    # /workspace/input — analogous to the local-mode `symlinks` entry.
+    # The agent workspace itself is mounted automatically by EvoMaster.
+    volumes:
+      "./playground/minimal_kaggle/data/public": "/workspace/input"
+
+    env_vars: {}
+
+    auto_remove: true
+    pull_image: "missing"
+    timeout: 600
+
+llm_output:
+  show_in_console: true
+  log_to_file: true
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: null
+  console: true

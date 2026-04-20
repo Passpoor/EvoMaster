@@ -170,6 +170,16 @@ class BaseSession(ABC):
         # Exact match to avoid false positives (e.g., "dir" in "not_dir")
         return stdout == "dir"
 
+    def get_workspace_path(self) -> str | None:
+        """Return a per-thread workspace override, if the session has one.
+
+        Default implementation returns ``None`` (no override; callers should
+        fall back to ``self.config.workspace_path``). ``LocalSession``
+        overrides this to provide a per-thread workspace used by the
+        ``split_workspace_for_exp`` parallel mode.
+        """
+        return None
+
     def __enter__(self) -> BaseSession:
         """Context manager entry."""
         self.open()

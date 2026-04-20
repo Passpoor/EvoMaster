@@ -302,10 +302,16 @@ class BasePlayground:
                     docker_config = session_config['docker']
                     container_workspace = docker_config.get('working_dir', '/workspace')
 
-                    # Update volumes mount
-                    if 'volumes' not in docker_config:
-                        docker_config['volumes'] = {}
-                    docker_config['volumes'][workspace_path_str] = container_workspace
+                    # Update volumes mount: drop any existing mount that
+                    # targets the same container path before adding ours, so
+                    # we don't end up with a "duplicate mount point" error
+                    # from `docker run`.
+                    existing = docker_config.get('volumes') or {}
+                    deduped = {
+                        h: c for h, c in existing.items() if c != container_workspace
+                    }
+                    deduped[workspace_path_str] = container_workspace
+                    docker_config['volumes'] = deduped
 
                     # Update workspace_path
                     docker_config['workspace_path'] = container_workspace
@@ -513,28 +519,58 @@ class BasePlayground:
         normalized_skill_config["skills"] = skills_config
         return self._get_or_create_skill_registry(normalized_skill_config)
 
+    def _build_docker_session_config_dict(self, overrides: dict | None = None) -> dict:
+        """Materialize a Docker session config dict with sensible defaults.
+
+        Pulls ``session.docker`` from the loaded config, syncs ``working_dir``
+        / ``workspace_path``, and optionally applies ``overrides`` on top
+        (used by the per-exp container path).
+        """
+        d = (self.config.session.get("docker", {}) or {}).copy()
+        if "working_dir" in d and "workspace_path" not in d:
+            d["workspace_path"] = d["working_dir"]
+        elif "workspace_path" in d and "working_dir" not in d:
+            d["working_dir"] = d["workspace_path"]
+        elif "workspace_path" not in d and "working_dir" not in d:
+            d["workspace_path"] = "/workspace"
+            d["working_dir"] = "/workspace"
+        # ``fresh_container_per_exp`` and ``parallel`` are playground-level
+        # concerns, not fields on DockerSessionConfig. Strip them before
+        # constructing the pydantic model. (Pydantic v2 ignores unknown
+        # fields by default, but being explicit avoids relying on that.)
+        d.pop("fresh_container_per_exp", None)
+        d.pop("parallel", None)
+        if overrides:
+            d.update(overrides)
+        return d
+
+    def _is_docker_fresh_per_exp(self) -> bool:
+        """True iff the docker config requests a fresh container per parallel exp."""
+        if self.config.session.get("type", "local") != "docker":
+            return False
+        return bool(
+            (self.config.session.get("docker", {}) or {}).get("fresh_container_per_exp", False)
+        )
+
     def _setup_session(self) -> None:
         """Create and open a Session (if not already created).
 
-        Selects a local or docker session based on configuration.
+        Selects a local or docker session based on configuration. When the
+        docker config sets ``fresh_container_per_exp: true``, the shared
+        session is *constructed but not opened* — the parallel executor will
+        spin up a per-exp DockerSession and inject it into the agents.
         """
         if self.session is None:
             session_type = self.config.session.get("type", "local")
             if session_type == "docker":
-                session_config_dict = self.config.session.get("docker", {}).copy()
-                # Sync working_dir and workspace_path
-                if "working_dir" in session_config_dict and "workspace_path" not in session_config_dict:
-                    session_config_dict["workspace_path"] = session_config_dict["working_dir"]
-                elif "workspace_path" in session_config_dict and "working_dir" not in session_config_dict:
-                    session_config_dict["working_dir"] = session_config_dict["workspace_path"]
-                elif "workspace_path" not in session_config_dict and "working_dir" not in session_config_dict:
-                    session_config_dict["workspace_path"] = "/workspace"
-                    session_config_dict["working_dir"] = "/workspace"
+                session_config_dict = self._build_docker_session_config_dict()
                 session_config = DockerSessionConfig(**session_config_dict)
                 self.session = DockerSession(session_config)
-                self.logger.info(f"Using Docker session with image: {session_config.image}")
+                self.logger.info(
+                    f"Using Docker session with image: {session_config.image}"
+                )
             else:
-                session_config_dict = self.config.session.get("local", {}).copy()
+                session_config_dict = (self.config.session.get("local", {}) or {}).copy()
                 # Sync working_dir and workspace_path
                 if "working_dir" in session_config_dict and "workspace_path" not in session_config_dict:
                     session_config_dict["workspace_path"] = session_config_dict["working_dir"]
@@ -546,12 +582,83 @@ class BasePlayground:
                 session_config = LocalSessionConfig(**session_config_dict)
                 self.session = LocalSession(session_config)
                 self.logger.info("Using Local session")
-        
-        # Open Session (if not already open)
+
+        # Open Session unless we're holding the shared docker session as a
+        # template for per-exp containers.
+        if self._is_docker_fresh_per_exp():
+            self.logger.info(
+                "Docker fresh_container_per_exp=true; the shared session is "
+                "kept as a template (not opened). Per-exp containers will be "
+                "created by the parallel executor."
+            )
+            return
+
         if not self.session.is_open:
             self.session.open()
         else:
             self.logger.debug("Session already open, reusing existing session")
+
+    def make_per_exp_docker_session(self, exp_index: int) -> DockerSession:
+        """Build a fresh DockerSession for one parallel exp.
+
+        The new session inherits all docker config, but with:
+
+        * a unique ``container_name`` (so containers don't collide),
+        * ``auto_remove=True`` (the whole point is to dispose after use),
+        * ``container_workspace`` pinned to a per-exp host directory under
+          ``run_dir/workspaces/exp_<i>`` (when ``run_dir`` is set), mounted
+          at the configured ``working_dir``.
+
+        Subclasses can override ``_per_exp_docker_overrides(idx)`` to inject
+        additional fields (extra env vars, different image, etc.).
+        """
+        import os
+        import time
+
+        # Build host workspace path for this exp; default to a per-exp subdir
+        # under run_dir/workspaces, falling back to a temp dir when run_dir is
+        # not set so the helper still works in isolation.
+        if self.run_dir is not None:
+            host_workspace = (Path(self.run_dir) / "workspaces" / f"exp_{exp_index}").resolve()
+        else:
+            host_workspace = (Path.cwd() / "runs" / "_per_exp" / f"exp_{exp_index}").resolve()
+        host_workspace.mkdir(parents=True, exist_ok=True)
+
+        # Determine the container-side mount target (matches working_dir).
+        base_dict = self._build_docker_session_config_dict()
+        container_workspace = base_dict.get("working_dir", "/workspace")
+
+        # Derive a unique container name. Honor the user's container_name as a
+        # *prefix* if they set one; otherwise generate from PID + exp index.
+        user_name = (self.config.session.get("docker", {}) or {}).get("container_name")
+        if user_name:
+            container_name = f"{user_name}-exp-{exp_index}"
+        else:
+            container_name = f"evomaster-{os.getpid()}-exp{exp_index}-{int(time.time())}"
+
+        # Override volumes to include exp-specific workspace mount.
+        volumes = dict(base_dict.get("volumes", {}) or {})
+        # Drop any prior mount that targets the same container path so we
+        # don't end up with two -v's pointing at the same target.
+        volumes = {h: c for h, c in volumes.items() if c != container_workspace}
+        volumes[str(host_workspace)] = container_workspace
+
+        overrides = {
+            "container_name": container_name,
+            "auto_remove": True,
+            "use_existing_container": None,
+            "volumes": volumes,
+        }
+        # Subclass extension hook
+        overrides.update(self._per_exp_docker_overrides(exp_index) or {})
+
+        cfg_dict = self._build_docker_session_config_dict(overrides=overrides)
+        cfg = DockerSessionConfig(**cfg_dict)
+        return DockerSession(cfg)
+
+    def _per_exp_docker_overrides(self, exp_index: int) -> dict | None:
+        """Hook for subclasses to inject extra DockerSessionConfig fields per exp."""
+        return None
 
     def _setup_tools(
         self,
@@ -1378,81 +1485,131 @@ class BasePlayground:
                 # Only mark as closed, but don't actually close the session (container keeps running)
                 self.logger.debug("Session marked as closed but container kept running")
 
-    def execute_parallel_tasks(self, tasks: List[Callable], max_workers: int = 3) -> List[Any]:
-            """General-purpose parallel task executor
+    def execute_parallel_tasks(
+        self,
+        tasks: List[Callable],
+        max_workers: int = 3,
+        pre_task_hook: Callable[[int], None] | None = None,
+        post_task_hook: Callable[[int], None] | None = None,
+    ) -> List[Any]:
+        """General-purpose parallel task executor.
 
-            Args:
-                tasks: Each element should be a callable object.
-                    If the function requires arguments, wrap it with functools.partial.
-                    Example: [partial(exp1.run, task="A"), partial(exp2.run, task="B")]
-                max_workers: Maximum number of parallel worker threads
+        Args:
+            tasks: Each element should be a callable object.
+                If the function requires arguments, wrap it with
+                ``functools.partial``.
+                Example: ``[partial(exp1.run, task="A"), partial(exp2.run, task="B")]``
+            max_workers: Maximum number of parallel worker threads.
+            pre_task_hook: Optional ``hook(parallel_index)`` invoked in the
+                worker thread *before* the task runs. Useful for spinning up
+                a per-exp Docker container or rebinding agent sessions.
+            post_task_hook: Optional ``hook(parallel_index)`` invoked in the
+                worker thread *after* the task finishes (in a ``finally``
+                block, so it runs even if the task raises). Useful for
+                tearing down per-exp containers / sessions.
 
-            Returns:
-                List[Any]: A list of results in the same order as the input tasks.
-                        If a task raises an exception, the corresponding position in the results list will contain that Exception object.
-            """
-            self.logger.info(f"Starting parallel execution of {len(tasks)} tasks with {max_workers} workers.")
-            
-            results = [None] * len(tasks)
-            
-            # Check if parallel resource allocation is enabled
-            session_config = self.config.session.get("local", {})
-            parallel_config = session_config.get("parallel", {})
-            parallel_enabled = parallel_config.get("enabled", False)
-            
-            # Check if split_workspace_for_exp is enabled
-            split_workspace = parallel_config.get("split_workspace_for_exp", False)
-            
-            # Wrap task functions to set parallel index and independent workspace
-            def wrap_task(task_func, parallel_index):
-                def wrapped():
-                    try:
-                        # If parallel resource allocation is enabled, set the session's parallel index
-                        if parallel_enabled and self.session is not None:
-                            from evomaster.agent.session.local import LocalSession
-                            if isinstance(self.session, LocalSession):
-                                self.session.set_parallel_index(parallel_index)
-                                self.logger.debug(f"Set parallel index: {parallel_index}")
-                                
-                                # If split_workspace_for_exp is enabled, create an independent workspace for the current exp
-                                if split_workspace:
-                                    import os
-                                    main_workspace = self.session.config.workspace_path
-                                    exp_workspace = os.path.join(main_workspace, f"exp_{parallel_index}")
-                                    # Create exp workspace via env (with symlinks)
-                                    self.session._env.setup_exp_workspace(exp_workspace)
-                                    # Set thread-local workspace path
-                                    self.session.set_workspace_path(exp_workspace)
-                                    self.logger.info(
-                                        f"Exp {parallel_index} using independent workspace: {exp_workspace}"
-                                    )
-                        return task_func()
-                    finally:
-                        # Clean up thread-local state
-                        if parallel_enabled and self.session is not None:
-                            from evomaster.agent.session.local import LocalSession
-                            if isinstance(self.session, LocalSession):
-                                self.session.set_parallel_index(None)
-                                if split_workspace:
-                                    self.session.set_workspace_path(None)
-                return wrapped
-            
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Submit all tasks, build future-to-index mapping to preserve return order
-                wrapped_tasks = [wrap_task(task, i) for i, task in enumerate(tasks)]
-                future_to_index = {executor.submit(wrapped_task): i for i, wrapped_task in enumerate(wrapped_tasks)}
+        Returns:
+            A list of results in the same order as the input tasks. If a
+            task raises an exception, the corresponding slot in the results
+            list contains that Exception object instead of a result.
+        """
+        self.logger.info(
+            f"Starting parallel execution of {len(tasks)} tasks "
+            f"with {max_workers} workers."
+        )
 
-                # Process completed tasks
-                for future in as_completed(future_to_index):
-                    index = future_to_index[future]
-                    try:
-                        # Get the return value
-                        result = future.result()
-                        results[index] = result
-                    except Exception as exc:
-                        self.logger.error(f"Task {index} generated an exception: {exc}")
-                        # Store exception object as result to avoid interrupting other tasks
-                        results[index] = exc
+        results: List[Any] = [None] * len(tasks)
 
-            self.logger.info("Parallel execution completed.")
-            return results
+        # Local-session parallel resource allocation knobs (only relevant
+        # when self.session is a LocalSession).
+        local_session_config = self.config.session.get("local", {}) or {}
+        parallel_config = local_session_config.get("parallel", {}) or {}
+        parallel_enabled = bool(parallel_config.get("enabled", False))
+        split_workspace = bool(parallel_config.get("split_workspace_for_exp", False))
+
+        # Docker-shared-container split workspace knob: when the Docker
+        # session is shared across exps, optionally pin each exp to its own
+        # in-container subdir of /workspace.
+        docker_session_config = self.config.session.get("docker", {}) or {}
+        docker_split_workspace = bool(docker_session_config.get("split_workspace_for_exp", False))
+
+        # Lazy import to avoid a hard dependency at module load.
+        from evomaster.agent.session.local import LocalSession
+        from evomaster.agent.session.docker import DockerSession
+
+        def wrap_task(task_func, parallel_index):
+            def wrapped():
+                try:
+                    # Per-thread setup for the LocalSession case.
+                    if parallel_enabled and isinstance(self.session, LocalSession):
+                        self.session.set_parallel_index(parallel_index)
+                        self.logger.debug(f"Set parallel index: {parallel_index}")
+                        if split_workspace:
+                            import os as _os
+                            main_workspace = self.session.config.workspace_path
+                            exp_workspace = _os.path.join(
+                                main_workspace, f"exp_{parallel_index}"
+                            )
+                            self.session._env.setup_exp_workspace(exp_workspace)
+                            self.session.set_workspace_path(exp_workspace)
+                            self.logger.info(
+                                f"Exp {parallel_index} using independent workspace: "
+                                f"{exp_workspace}"
+                            )
+
+                    # Per-thread setup for the shared-DockerSession case:
+                    # create an exp-specific subdir inside /workspace so the
+                    # parallel exps don't trample each other.
+                    if (
+                        docker_split_workspace
+                        and isinstance(self.session, DockerSession)
+                        and self.session.is_open
+                    ):
+                        wd = self.session.config.working_dir
+                        exp_subdir = f"{wd.rstrip('/')}/exp_{parallel_index}"
+                        # mkdir + cd so this thread's stateful cwd lands inside it.
+                        self.session._env.exec_bash_stateful(
+                            f"mkdir -p {exp_subdir} && cd {exp_subdir}",
+                            timeout=30,
+                        )
+                        self.logger.info(
+                            f"Exp {parallel_index} using container subdir: {exp_subdir}"
+                        )
+
+                    if pre_task_hook is not None:
+                        pre_task_hook(parallel_index)
+
+                    return task_func()
+                finally:
+                    # Run user post hook first so it can observe per-thread
+                    # state before we clear it.
+                    if post_task_hook is not None:
+                        try:
+                            post_task_hook(parallel_index)
+                        except Exception as e:
+                            self.logger.error(
+                                f"post_task_hook for exp {parallel_index} raised: {e}",
+                                exc_info=True,
+                            )
+                    # Clean up thread-local state on the local session.
+                    if parallel_enabled and isinstance(self.session, LocalSession):
+                        self.session.set_parallel_index(None)
+                        if split_workspace:
+                            self.session.set_workspace_path(None)
+            return wrapped
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            wrapped_tasks = [wrap_task(task, i) for i, task in enumerate(tasks)]
+            future_to_index = {
+                executor.submit(wt): i for i, wt in enumerate(wrapped_tasks)
+            }
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    results[index] = future.result()
+                except Exception as exc:
+                    self.logger.error(f"Task {index} generated an exception: {exc}")
+                    results[index] = exc
+
+        self.logger.info("Parallel execution completed.")
+        return results
