@@ -65,21 +65,75 @@ class DockerEnvConfig(EnvConfig):
 _EVO_MARKER = "__EVOMASTER_CMD_END__"
 
 
-def _resolve_host_path(host_path: str) -> str:
+def _find_project_root(start: Path) -> Path | None:
+    """Walk up from ``start`` looking for a directory containing ``evomaster/``.
+
+    Mirrors the heuristic used by :mod:`evomaster.env.local` for symlink
+    resolution, so relative volume paths in YAML ("./assets") behave the
+    same way regardless of the session type.
+    """
+    try:
+        current = start.resolve()
+    except Exception:
+        current = start
+    while current != current.parent:
+        candidate = current / "evomaster"
+        if candidate.exists() and candidate.is_dir():
+            return current
+        current = current.parent
+    return None
+
+
+def _normalize_cpuset_spec(
+    cpu_devices: "str | list[int] | list[str] | None",
+) -> str | None:
+    """Normalize ``cpu_devices`` into a string usable as ``--cpuset-cpus``.
+
+    Accepts the same shapes as the local session's ``cpu_devices``:
+    ``"0-15"``, ``"0,2,4"``, ``[0, 1, 2, 3]``, or ``None``.
+    """
+    if cpu_devices is None:
+        return None
+    if isinstance(cpu_devices, str):
+        s = cpu_devices.strip()
+        return s or None
+    if isinstance(cpu_devices, (list, tuple)):
+        if not cpu_devices:
+            return None
+        return ",".join(str(c) for c in cpu_devices)
+    return str(cpu_devices)
+
+
+def _resolve_host_path(host_path: str, config_dir: str | None = None) -> str:
     """Resolve a (possibly relative or ``~``-expanded) host path to an absolute path.
 
     Docker requires absolute host paths for bind mounts; a relative path
     silently gets interpreted as a *named volume*, which is almost never
     what the user intended. We also expand ``~`` here.
+
+    Resolution order for relative paths:
+
+    1. Project root discovered by walking up from ``config_dir`` until a
+       directory containing ``evomaster/`` is found (same logic the local
+       session uses for symlinks). This is what users typically expect for
+       ``./assets`` / ``./data`` style entries in YAML.
+    2. Project root discovered the same way from the current working
+       directory.
+    3. Current working directory itself (legacy fallback).
     """
     p = Path(os.path.expanduser(host_path))
-    if not p.is_absolute():
-        p = (Path.cwd() / p).resolve()
-    else:
-        # ``resolve`` is a no-op on missing absolute paths in newer Python,
-        # which is what we want; just normalize.
-        p = p.resolve()
-    return str(p)
+    if p.is_absolute():
+        return str(p.resolve())
+
+    base: Path | None = None
+    if config_dir:
+        base = _find_project_root(Path(config_dir))
+    if base is None:
+        base = _find_project_root(Path.cwd())
+    if base is None:
+        base = Path.cwd()
+
+    return str((base / p).resolve())
 
 
 class DockerEnv(BaseEnv):
@@ -129,6 +183,11 @@ class DockerEnv(BaseEnv):
 
         self.logger.info("Setting up Docker environment")
         self._ensure_docker_available()
+        # Pre-container step: expose any non-workspace volumes as symlinks
+        # inside the host workspace, so the user can browse the *same* tree
+        # from the host that the container sees. Runs *before* the container
+        # is created because it only touches host paths.
+        self._setup_workspace_symlinks()
         self._create_or_get_container()
         self._initialize_container()
         self._is_ready = True
@@ -170,6 +229,121 @@ class DockerEnv(BaseEnv):
         self._thread_local = threading.local()
         self._is_ready = False
         self.logger.info("Docker environment teardown complete")
+
+    def _setup_workspace_symlinks(self) -> None:
+        """Mirror non-workspace bind mounts into the host workspace via symlinks.
+
+        Motivation: when the user configures multiple ``volumes`` with
+        targets nested inside ``working_dir`` (e.g. a workspace bind mount
+        at ``/workspace`` *and* ``/data/foo`` → ``/workspace/foo``),
+        Docker layers the second mount on top of the first inside the
+        container. From the host, however, ``<host_workspace>/foo`` is an
+        ordinary empty directory because the host bind mount of
+        ``/workspace`` doesn't know about the nested mount. Agents and
+        users that want to inspect their runs from the host end up seeing
+        an empty ``foo/`` under ``runs/<task>/workspace/``.
+
+        We compensate by creating a symlink ``<host_workspace>/foo →
+        <resolved host path for /data/foo>`` on the host, so the host
+        view matches the in-container view.
+
+        Safe to call repeatedly: existing symlinks are replaced, already-
+        populated directories are left alone.
+        """
+        sc = self.config.session_config
+        working_dir = (sc.working_dir or "/workspace").rstrip("/")
+        if not working_dir:
+            return
+
+        volumes = sc.volumes or {}
+        if not volumes:
+            return
+
+        config_dir = getattr(sc, "config_dir", None)
+
+        # Locate the host path mounted at working_dir (if any).
+        host_workspace: Path | None = None
+        for host_path, container_path in volumes.items():
+            cp = str(container_path).rstrip("/")
+            if cp == working_dir:
+                host_workspace = Path(
+                    _resolve_host_path(host_path, config_dir=config_dir)
+                )
+                break
+        if host_workspace is None:
+            return
+
+        try:
+            host_workspace.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            self.logger.warning(
+                f"Cannot create host workspace {host_workspace}: {e}"
+            )
+            return
+
+        for host_path, container_path in volumes.items():
+            cp = str(container_path).rstrip("/")
+            if cp == working_dir:
+                continue
+            prefix = working_dir + "/"
+            if not cp.startswith(prefix):
+                continue
+            rel = cp[len(prefix):]
+            if not rel:
+                continue
+            link_path = host_workspace / rel
+            resolved_source = Path(
+                _resolve_host_path(host_path, config_dir=config_dir)
+            )
+
+            try:
+                link_path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                self.logger.warning(
+                    f"Cannot create parent of {link_path}: {e}"
+                )
+                continue
+
+            # Remove any prior placeholder. Only drop directories that are
+            # either empty or already symlinks (never blow away real data).
+            try:
+                if link_path.is_symlink():
+                    link_path.unlink()
+                elif link_path.is_dir():
+                    try:
+                        link_path.rmdir()  # only succeeds if empty
+                    except OSError:
+                        self.logger.info(
+                            f"Workspace path {link_path} is a non-empty "
+                            f"directory; leaving it in place instead of "
+                            f"replacing with a symlink to {resolved_source}."
+                        )
+                        continue
+                elif link_path.exists():
+                    # A regular file at that path would be destroyed by a
+                    # symlink create; skip rather than delete user data.
+                    self.logger.info(
+                        f"Workspace path {link_path} already exists as a "
+                        f"file; leaving it in place."
+                    )
+                    continue
+            except Exception as e:
+                self.logger.warning(
+                    f"Could not clear existing path {link_path}: {e}"
+                )
+                continue
+
+            try:
+                os.symlink(resolved_source, link_path)
+                self.logger.info(
+                    f"Workspace symlink: {link_path} -> {resolved_source} "
+                    f"(container path: {container_path})"
+                )
+            except OSError as e:
+                self.logger.warning(
+                    f"Failed to create workspace symlink "
+                    f"{link_path} -> {resolved_source}: {e}"
+                )
 
     def _stop_and_remove_container(self) -> None:
         """Stop and remove the container we created. Tolerant to ``--rm`` races."""
@@ -366,8 +540,18 @@ class DockerEnv(BaseEnv):
         # them by setting an empty value or zero).
         if sc.memory_limit:
             cmd.extend(["--memory", str(sc.memory_limit)])
+            # memory + swap to the same value so the container actually
+            # hits OOM at `memory_limit` instead of silently spilling into
+            # swap. Users can disable by passing `memory_limit: null`.
+            cmd.extend(["--memory-swap", str(sc.memory_limit)])
         if sc.cpu_limit and float(sc.cpu_limit) > 0:
             cmd.extend(["--cpus", str(sc.cpu_limit)])
+        # CPU pinning. Unlike `--cpus`, `--cpuset-cpus` actually restricts
+        # which cores the container can see/use, so htop inside the
+        # container only shows the pinned subset.
+        cpuset_spec = _normalize_cpuset_spec(getattr(sc, "cpu_devices", None))
+        if cpuset_spec:
+            cmd.extend(["--cpuset-cpus", cpuset_spec])
 
         # GPU: ``--gpus`` syntax differs by spec; we normalize a few common
         # forms from YAML.
@@ -393,8 +577,9 @@ class DockerEnv(BaseEnv):
         cmd.extend(["-w", sc.working_dir])
 
         # Volumes (resolve relative host paths to absolute and create them).
+        config_dir = getattr(sc, "config_dir", None)
         for host_path, container_path in (sc.volumes or {}).items():
-            resolved = _resolve_host_path(host_path)
+            resolved = _resolve_host_path(host_path, config_dir=config_dir)
             try:
                 Path(resolved).mkdir(parents=True, exist_ok=True)
             except Exception as e:
@@ -653,6 +838,7 @@ class DockerEnv(BaseEnv):
         cp = str(Path(container_path).as_posix())
         if not cp.startswith("/"):
             return False, None
+        config_dir = getattr(sc, "config_dir", None)
         # Walk volumes longest mount-point first so nested mounts win.
         for host_path, mount_point in sorted(
             sc.volumes.items(), key=lambda kv: len(kv[1]), reverse=True
@@ -661,10 +847,11 @@ class DockerEnv(BaseEnv):
             if not mp:
                 continue
             if cp == mp:
-                return True, _resolve_host_path(host_path)
+                return True, _resolve_host_path(host_path, config_dir=config_dir)
             if cp.startswith(mp + "/"):
                 rel = cp[len(mp) + 1:]
-                return True, str(Path(_resolve_host_path(host_path)) / rel)
+                host_root = _resolve_host_path(host_path, config_dir=config_dir)
+                return True, str(Path(host_root) / rel)
         return False, None
 
     # ------------------------------------------------------------------ #

@@ -143,14 +143,27 @@ session:
 
     working_dir: "/workspace"
 
+    # Resource limits. `memory_limit` is enforced by the cgroup (plus
+    # `--memory-swap` matching `memory_limit` so swap can't mask it), but
+    # `htop` / `free` inside the container still show the host's total
+    # memory (`/proc/meminfo` isn't namespaced). `cpu_limit` only throttles
+    # CPU *time*; use `cpu_devices` below to actually restrict which cores
+    # are visible.
     memory_limit: "16g"
     cpu_limit: 16.0
+    cpu_devices: null     # --cpuset-cpus. null = no pinning; "0-15",
+                          # "0,2,4", or [0,1,2] restricts visible cores.
     gpu_devices: ["0"]
     network_mode: "host"
 
     # Mount the kaggle competition input data into the container at
     # /workspace/input — analogous to the local-mode `symlinks` entry.
-    # The agent workspace itself is mounted automatically by EvoMaster.
+    # Relative host paths ("./playground/...") resolve against the project
+    # root (directory containing `evomaster/`). Because
+    # `/workspace/input` nests inside `working_dir`, EvoMaster also creates
+    # a host-side symlink at `runs/<run>/workspace/input → .../data/public`
+    # so the data is browsable from the host exactly as the container
+    # sees it. The agent workspace itself is mounted automatically.
     volumes:
       "./playground/minimal_kaggle/data/public": "/workspace/input"
 

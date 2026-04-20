@@ -94,11 +94,32 @@ session:
 
     working_dir: "/workspace"
 
+    # TOTAL resource budget across all parallel exps. When
+    # `parallel.max_parallel > 1`, these are divided per container:
+    #   memory_limit 48g, max_parallel 3 -> 16g per container
+    #   cpu_limit    36,  max_parallel 3 -> 12  per container
+    #   cpu_devices  0-35,max_parallel 3 -> 0-11 / 12-23 / 24-35
+    #   gpu_devices  [0,1,2], max_parallel 3 -> one GPU per container
     memory_limit: "48g"
     cpu_limit: 36.0
+
+    # CPU pinning (--cpuset-cpus). Unlike `cpu_limit` (--cpus), which only
+    # throttles CPU time, this actually restricts the visible CPU set, so
+    # `htop` inside the container only shows the pinned cores. Accepts the
+    # same shapes as the local session: "0-35", "0,2,4", or [0, 1, 2, 3].
+    # Leave unset for no pinning.
+    cpu_devices: "0-35"
+
     gpu_devices: ["0", "1", "2"]
     network_mode: "host"
 
+    # Volumes: {host_path: container_path}. Relative host paths
+    # ("./assets") are resolved against the project root (the directory
+    # containing `evomaster/`), not the current working directory.
+    # Volumes whose container target lives inside `working_dir`
+    # (e.g. /workspace/docker_images) are mirrored as host symlinks
+    # inside each exp's host workspace, so the host view matches the
+    # in-container view.
     volumes: {"/data/xinyu/docker_images":"/workspace/docker_images"}
     env_vars: {}
 

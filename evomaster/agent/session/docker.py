@@ -74,6 +74,15 @@ class DockerSessionConfig(SessionConfig):
         default=2.0,
         description="CPU limit in cores; <= 0 disables the flag.",
     )
+    cpu_devices: str | list[int] | None = Field(
+        default=None,
+        description=(
+            "CPU set (pinning), passed as --cpuset-cpus. Restricts which "
+            "physical CPUs the container sees (unlike --cpus, which only "
+            "throttles total CPU time). Formats: '0-15', '0,2,4', or a list "
+            "like [0, 1, 2, 3]. None means no pinning."
+        ),
+    )
     gpu_devices: str | list[str] | None = Field(
         default=None,
         description=(
@@ -104,6 +113,16 @@ class DockerSessionConfig(SessionConfig):
     pull_image: str = Field(
         default="missing",
         description="Image pull policy: 'missing' (default), 'always', or 'never'.",
+    )
+    config_dir: str | None = Field(
+        default=None,
+        description=(
+            "Directory of the YAML config file, used to resolve relative "
+            "host paths in `volumes`. When set, relative paths are resolved "
+            "against the project root (walked up from `config_dir` until a "
+            "directory containing `evomaster/` is found); falls back to the "
+            "current working directory otherwise."
+        ),
     )
 
 

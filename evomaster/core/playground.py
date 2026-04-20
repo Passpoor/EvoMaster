@@ -31,6 +31,88 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 _thread_playground_map: dict[int, object] = {}
 
 
+def _expand_cpu_devices(spec: str | list | None) -> list[int] | None:
+    """Expand a cpu-devices YAML value into a flat list of CPU ids.
+
+    Accepts the same shapes as the local session's ``cpu_devices``:
+
+    * ``"0-15"`` → ``[0, 1, ..., 15]``
+    * ``"0,2,4"`` → ``[0, 2, 4]``
+    * ``[0, 1, 2, 3]`` → ``[0, 1, 2, 3]``
+    * ``None`` / ``""`` → ``None`` (no allocation)
+    """
+    if spec is None:
+        return None
+    if isinstance(spec, (list, tuple)):
+        try:
+            return [int(c) for c in spec]
+        except (TypeError, ValueError):
+            return None
+    if not isinstance(spec, str):
+        return None
+    s = spec.strip()
+    if not s:
+        return None
+    out: list[int] = []
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, _, b = part.partition("-")
+            try:
+                out.extend(range(int(a), int(b) + 1))
+            except ValueError:
+                return None
+        else:
+            try:
+                out.append(int(part))
+            except ValueError:
+                return None
+    return out or None
+
+
+def _format_cpu_list(cpus: list[int]) -> str:
+    """Format a list of CPU ids back into a docker-friendly cpuset string.
+
+    Uses ``"<start>-<end>"`` when the list is a contiguous range,
+    ``"0,2,4"`` otherwise.
+    """
+    if not cpus:
+        return ""
+    if len(cpus) == 1:
+        return str(cpus[0])
+    if cpus == list(range(cpus[0], cpus[-1] + 1)):
+        return f"{cpus[0]}-{cpus[-1]}"
+    return ",".join(str(c) for c in cpus)
+
+
+def _expand_gpu_devices(spec: str | list | None) -> list[str] | None:
+    """Expand a gpu-devices YAML value into a list of GPU ids for splitting.
+
+    Returns:
+        * ``None`` when the value is ``None`` / ``"none"`` / ``""``,
+          or when the value is ``"all"`` / a single id (can't be split).
+        * A list of string ids otherwise, e.g. ``["0", "1", "2"]``.
+    """
+    if spec is None:
+        return None
+    if isinstance(spec, (list, tuple)):
+        items = [str(x) for x in spec if str(x).strip()]
+        return items or None
+    if not isinstance(spec, str):
+        return None
+    s = spec.strip()
+    low = s.lower()
+    if not s or low in ("none", "null", "all"):
+        return None
+    if "," in s:
+        items = [p.strip() for p in s.split(",") if p.strip()]
+        return items or None
+    # Single id — don't split; return None so the allocator passes it through.
+    return None
+
+
 class _SessionThreadFilter(logging.Filter):
     """Only passes log records from threads currently working for this session.
 
@@ -540,6 +622,10 @@ class BasePlayground:
         # fields by default, but being explicit avoids relying on that.)
         d.pop("fresh_container_per_exp", None)
         d.pop("parallel", None)
+        # Propagate config_dir so the session can resolve relative volume
+        # paths against the project root (matches the local-session path).
+        if "config_dir" not in d:
+            d["config_dir"] = str(self.config_dir)
         if overrides:
             d.update(overrides)
         return d
@@ -608,6 +694,12 @@ class BasePlayground:
         * ``container_workspace`` pinned to a per-exp host directory under
           ``run_dir/workspaces/exp_<i>`` (when ``run_dir`` is set), mounted
           at the configured ``working_dir``.
+        * resource limits (``memory_limit`` / ``cpu_limit`` /
+          ``cpu_devices`` / ``gpu_devices``) scaled down to a per-exp share
+          when the docker config declares ``parallel.max_parallel > 1``.
+          This mirrors how the local session splits ``cpu_devices`` /
+          ``gpu_devices`` across parallel workers: the user specifies the
+          *total* budget once, and the playground divides it.
 
         Subclasses can override ``_per_exp_docker_overrides(idx)`` to inject
         additional fields (extra env vars, different image, etc.).
@@ -643,18 +735,161 @@ class BasePlayground:
         volumes = {h: c for h, c in volumes.items() if c != container_workspace}
         volumes[str(host_workspace)] = container_workspace
 
-        overrides = {
+        overrides: dict[str, Any] = {
             "container_name": container_name,
             "auto_remove": True,
             "use_existing_container": None,
             "volumes": volumes,
         }
-        # Subclass extension hook
+
+        # Split the docker resource budget across parallel exps.
+        resource_overrides = self._per_exp_docker_resource_allocation(
+            exp_index, base_dict
+        )
+        overrides.update(resource_overrides)
+
+        # Subclass extension hook (applied last so subclasses win).
         overrides.update(self._per_exp_docker_overrides(exp_index) or {})
 
         cfg_dict = self._build_docker_session_config_dict(overrides=overrides)
         cfg = DockerSessionConfig(**cfg_dict)
         return DockerSession(cfg)
+
+    def _per_exp_docker_resource_allocation(
+        self,
+        exp_index: int,
+        base_dict: dict,
+    ) -> dict:
+        """Compute per-exp docker resource overrides for parallel execution.
+
+        Reads ``parallel.max_parallel`` from the docker session config. When
+        ``max_parallel <= 1`` (or unset) the user-supplied limits are kept
+        as-is. Otherwise:
+
+        * ``memory_limit`` is divided (value + unit preserved when possible).
+        * ``cpu_limit`` is divided, with a floor of 1 core.
+        * ``cpu_devices`` (cpuset) is split contiguously across exps; the
+          last exp absorbs any remainder so no cores are wasted.
+        * ``gpu_devices`` (a list) is split contiguously across exps; a
+          single GPU id or ``"all"`` is passed through unchanged.
+        """
+        docker_cfg = self.config.session.get("docker", {}) or {}
+        parallel_cfg = docker_cfg.get("parallel", {}) or {}
+        try:
+            max_parallel = int(parallel_cfg.get("max_parallel", 1) or 1)
+        except (TypeError, ValueError):
+            max_parallel = 1
+        if max_parallel <= 1:
+            return {}
+
+        # Clamp to the number of exps we actually intend to run so logs
+        # match reality even when a subclass overrides `max_workers`.
+        max_workers = getattr(self, "max_workers", None)
+        if isinstance(max_workers, int) and max_workers > 0:
+            max_parallel = min(max_parallel, max_workers)
+        if max_parallel <= 1:
+            return {}
+
+        effective_index = exp_index % max_parallel
+
+        overrides: dict[str, Any] = {}
+
+        # Memory: e.g. "48g" / "16384m" / "16000000000".
+        mem = base_dict.get("memory_limit")
+        if mem:
+            split_mem = self._split_memory_limit(mem, max_parallel)
+            if split_mem:
+                overrides["memory_limit"] = split_mem
+
+        # CPU throughput (--cpus). Docker accepts fractional cpus; we round
+        # to 2 decimals so the flag stays readable in the command line.
+        cpu_limit = base_dict.get("cpu_limit")
+        try:
+            cpu_limit_f = float(cpu_limit) if cpu_limit is not None else 0.0
+        except (TypeError, ValueError):
+            cpu_limit_f = 0.0
+        if cpu_limit_f > 0:
+            per_cpu = round(cpu_limit_f / max_parallel, 2)
+            # Guard against rounding down to 0 which docker rejects.
+            if per_cpu < 0.01:
+                per_cpu = 0.01
+            overrides["cpu_limit"] = per_cpu
+
+        # CPU pinning (--cpuset-cpus). Split the user's list/range evenly.
+        cpu_devices = base_dict.get("cpu_devices")
+        cpu_list = _expand_cpu_devices(cpu_devices)
+        if cpu_list:
+            total = len(cpu_list)
+            per = total // max_parallel
+            if per > 0:
+                start = effective_index * per
+                end = start + per
+                # Last slot absorbs any remainder so all cores stay in use.
+                if effective_index == max_parallel - 1:
+                    end = total
+                slice_ = cpu_list[start:end]
+                if slice_:
+                    overrides["cpu_devices"] = _format_cpu_list(slice_)
+
+        # GPUs. Only split when given an explicit list; pass-through
+        # singletons and "all" unchanged so we don't silently drop GPUs.
+        gpu_devices = base_dict.get("gpu_devices")
+        gpu_list = _expand_gpu_devices(gpu_devices)
+        if gpu_list is not None:
+            total = len(gpu_list)
+            if total >= max_parallel:
+                per = total // max_parallel
+                start = effective_index * per
+                end = start + per
+                if effective_index == max_parallel - 1:
+                    end = total
+                slice_ = gpu_list[start:end]
+                if slice_:
+                    overrides["gpu_devices"] = (
+                        slice_[0] if len(slice_) == 1 else slice_
+                    )
+            else:
+                # More exps than GPUs: wrap around so every exp still gets
+                # at least one device. Sharing is inevitable here.
+                overrides["gpu_devices"] = gpu_list[effective_index % total]
+
+        return overrides
+
+    @staticmethod
+    def _split_memory_limit(value: str | int, parts: int) -> str | None:
+        """Divide a docker memory string (e.g. ``"48g"``) into ``parts``.
+
+        Returns a string in the same unit when possible; falls back to
+        plain bytes when the input is a raw integer.
+        """
+        if parts <= 1:
+            return str(value)
+
+        s = str(value).strip().lower()
+        if not s:
+            return None
+
+        # Extract numeric prefix + unit suffix.
+        unit = ""
+        num_str = s
+        for i, ch in enumerate(s):
+            if not (ch.isdigit() or ch == "."):
+                num_str, unit = s[:i], s[i:]
+                break
+        try:
+            num = float(num_str)
+        except ValueError:
+            return None
+
+        per = num / parts
+        if unit in ("", "b"):
+            # Plain bytes — round down to the nearest integer.
+            return str(int(per))
+        # Preserve unit; format with up to 2 decimals and trim trailing zeros.
+        per_str = f"{per:.2f}".rstrip("0").rstrip(".")
+        if not per_str:
+            per_str = "0"
+        return f"{per_str}{unit}"
 
     def _per_exp_docker_overrides(self, exp_index: int) -> dict | None:
         """Hook for subclasses to inject extra DockerSessionConfig fields per exp."""

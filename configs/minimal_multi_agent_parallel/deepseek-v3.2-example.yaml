@@ -139,8 +139,22 @@ session:
     working_dir: "/workspace"
     
     # Resource limits
-    memory_limit: "64g"  # Memory limit, e.g. "4g", "8g"
-    cpu_limit: 16.0      # CPU limit (number of cores)
+    memory_limit: "64g"  # Memory limit, e.g. "4g", "8g". Enforced via
+                         # cgroup; note `/proc/meminfo` inside the
+                         # container still reflects the host (kernel
+                         # limitation), so `htop`/`free` won't show this
+                         # limit — it's still applied by the kernel.
+    cpu_limit: 16.0      # CPU time cap (--cpus). Throttles throughput
+                         # only; does NOT restrict which cores are
+                         # visible. Use `cpu_devices` below to restrict
+                         # visibility.
+    cpu_devices: null    # CPU pinning (--cpuset-cpus). Restricts which
+                         # physical cores the container sees (so
+                         # `htop` only shows the pinned set). Options:
+                         #   - null: no pinning
+                         #   - "0-15": cores 0 through 15
+                         #   - "0,2,4": cores 0, 2, 4
+                         #   - [0, 1, 2, 3]: Python list form
     gpu_devices: "0"   # GPU devices, options:
                         #   - null: do not use GPU
                         #   - "all": use all GPUs
