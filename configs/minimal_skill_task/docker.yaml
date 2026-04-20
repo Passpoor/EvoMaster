@@ -127,7 +127,7 @@ session:
   type: "docker"
 
   docker:
-    image: "python:3.11"
+    image: "evomaster/base:bohrium"
     container_name: null
     use_existing_container: null
 
