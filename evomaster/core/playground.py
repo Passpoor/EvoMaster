@@ -384,22 +384,35 @@ class BasePlayground:
                     docker_config = session_config['docker']
                     container_workspace = docker_config.get('working_dir', '/workspace')
 
-                    # Update volumes mount: drop any existing mount that
-                    # targets the same container path before adding ours, so
-                    # we don't end up with a "duplicate mount point" error
-                    # from `docker run`.
-                    existing = docker_config.get('volumes') or {}
-                    deduped = {
-                        h: c for h, c in existing.items() if c != container_workspace
-                    }
-                    deduped[workspace_path_str] = container_workspace
-                    docker_config['volumes'] = deduped
+                    # If the user already declared a volume at the same
+                    # container target, respect it: log a warning and leave
+                    # their mount untouched. Previously we silently dropped
+                    # their entry to avoid a "duplicate mount point" error,
+                    # which made configs like `{"./assets": "/workspace"}`
+                    # appear to be ignored.
+                    existing = dict(docker_config.get('volumes') or {})
+                    user_mounts_at_target = [
+                        h for h, c in existing.items() if c == container_workspace
+                    ]
+                    if user_mounts_at_target:
+                        self.logger.warning(
+                            f"User-defined volume {user_mounts_at_target[0]!r} -> "
+                            f"{container_workspace!r} overrides the auto workspace mount "
+                            f"{workspace_path_str!r} -> {container_workspace!r}; "
+                            f"the host view under run_dir/workspace will not reflect "
+                            f"files created inside the container. Keeping the user mount."
+                        )
+                        docker_config['volumes'] = existing
+                    else:
+                        existing[workspace_path_str] = container_workspace
+                        docker_config['volumes'] = existing
+                        self.logger.debug(
+                            f"Updated Docker volume: {workspace_path_str} -> {container_workspace}"
+                        )
 
                     # Update workspace_path
                     docker_config['workspace_path'] = container_workspace
                     docker_config['working_dir'] = container_workspace
-
-                    self.logger.debug(f"Updated Docker volume: {workspace_path_str} -> {container_workspace}")
 
             # For Pydantic models (if already loaded)
             elif hasattr(session_config, 'local') and hasattr(session_config.local, 'workspace_path'):

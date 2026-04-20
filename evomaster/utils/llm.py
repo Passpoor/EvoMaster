@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import logging
 import sys
+import threading
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -126,6 +127,113 @@ def truncate_content(content: str, max_length: int = 5000, head_length: int = 25
         The full content.
     """
     return content
+
+
+class _SDKRetryReasonFilter(logging.Filter):
+    """Enrich the OpenAI / Anthropic SDK retry log with the underlying cause.
+
+    Both SDKs emit two separate records around a retry:
+
+        log.debug("Encountered httpx.TimeoutException", exc_info=True)  # or similar
+        log.info("Retrying request to %s in %f seconds", url, timeout)
+
+    The ``Encountered ...`` record carries the actual exception via
+    ``exc_info`` but is only visible at DEBUG. Users running at INFO see the
+    ``Retrying request ...`` line with no context and cannot tell whether
+    it was a network timeout, a 5xx, a 429, etc.
+
+    This filter attaches itself to the SDK's ``_base_client`` logger, captures
+    the exception from the most recent ``Encountered`` record (per thread),
+    and appends a short summary to the next ``Retrying request`` message on
+    the same thread. The filter always returns True so nothing is dropped.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Per-thread storage so concurrent requests don't scramble reasons.
+        self._local = threading.local()
+
+    def _get_last_reason(self) -> str | None:
+        return getattr(self._local, "last_reason", None)
+
+    def _set_last_reason(self, value: str | None) -> None:
+        self._local.last_reason = value
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            msg = record.getMessage()
+        except Exception:
+            return True
+
+        if msg.startswith("Encountered "):
+            exc_info = record.exc_info
+            if exc_info and exc_info[1] is not None:
+                exc = exc_info[1]
+                exc_str = str(exc).strip()
+                status = getattr(exc, "status_code", None)
+                summary = f"{type(exc).__name__}"
+                if status is not None:
+                    summary += f" (status={status})"
+                if exc_str:
+                    summary += f": {exc_str}"
+                self._set_last_reason(summary)
+            else:
+                # Fall back to the bare "Encountered <X>" string.
+                self._set_last_reason(msg)
+            return True
+
+        if msg.startswith("Retrying request to"):
+            reason = self._get_last_reason() or "unknown (set logging level DEBUG on the SDK logger for details)"
+            # Rewrite the record so the reason shows up wherever the original
+            # line was going. Pre-render with the current args to keep
+            # downstream formatting simple and avoid mutating args.
+            try:
+                rendered = record.msg % record.args if record.args else record.msg
+            except Exception:
+                rendered = record.msg
+            record.msg = f"{rendered} (reason: {reason})"
+            record.args = None
+            self._set_last_reason(None)
+            return True
+
+        return True
+
+
+_SDK_RETRY_LOGGER_NAMES = (
+    "openai._base_client",
+    "anthropic._base_client",
+)
+
+_sdk_retry_filter_installed = False
+
+
+def _install_sdk_retry_reason_filter() -> None:
+    """Attach :class:`_SDKRetryReasonFilter` to the OpenAI / Anthropic SDK loggers.
+
+    Sets each logger level to DEBUG so ``Encountered ...`` debug records reach
+    the filter (the records themselves still propagate to the root handlers,
+    which typically ignore them at INFO/WARN, so the console is not spammed).
+    Safe to call multiple times — the filter is only installed once.
+    """
+    global _sdk_retry_filter_installed
+    if _sdk_retry_filter_installed:
+        return
+    filt = _SDKRetryReasonFilter()
+    for name in _SDK_RETRY_LOGGER_NAMES:
+        lg = logging.getLogger(name)
+        # DEBUG so the "Encountered ..." record passes the logger-level gate
+        # and reaches our filter. Handlers further up still enforce their own
+        # level, so the extra debug records are not emitted to the console.
+        if lg.level == logging.NOTSET or lg.level > logging.DEBUG:
+            lg.setLevel(logging.DEBUG)
+        # Avoid double-installing if the module is re-imported.
+        already = any(isinstance(f, _SDKRetryReasonFilter) for f in lg.filters)
+        if not already:
+            lg.addFilter(filt)
+    _sdk_retry_filter_installed = True
+
+
+_install_sdk_retry_reason_filter()
 
 
 class LLMConfig(BaseModel):

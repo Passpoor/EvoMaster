@@ -238,6 +238,20 @@ class DockerSession(BaseSession):
 
         return self._env.exec_bash_stateful(command, timeout=timeout)
 
+    def to_session_path(self, host_path: str) -> str:
+        """Translate a host path to the matching path inside the container.
+
+        Looks up the DockerEnv volume mappings; if ``host_path`` falls under
+        one of them, returns the in-container path. When no mount covers the
+        path we fall back to the original host path — the caller will get a
+        clear "file not found" error inside the container, which is easier
+        to diagnose than a silent mistranslation.
+        """
+        container_path = self._env.host_to_container_path(host_path)
+        if container_path is not None:
+            return container_path
+        return host_path
+
     # ------------------------------------------------------------------ #
     # File I/O — delegate to DockerEnv
     # ------------------------------------------------------------------ #

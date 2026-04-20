@@ -825,6 +825,49 @@ class DockerEnv(BaseEnv):
     # Volume helpers
     # ------------------------------------------------------------------ #
 
+    def host_to_container_path(self, host_path: str) -> str | None:
+        """Map an absolute host path to the corresponding path inside the container.
+
+        Walks the configured bind mounts (longest host prefix first so nested
+        mounts win) and returns the container path for the first match. When
+        no bind mount covers ``host_path``, returns ``None`` — the file is
+        not visible inside the container and the caller must either copy it
+        in or add a volume mount.
+        """
+        sc = self.config.session_config
+        if not sc.volumes:
+            return None
+        try:
+            hp = Path(os.path.expanduser(host_path))
+            hp = hp.resolve() if hp.is_absolute() else Path(
+                _resolve_host_path(str(hp), config_dir=getattr(sc, "config_dir", None))
+            ).resolve()
+        except Exception:
+            return None
+        hp_str = str(hp)
+        config_dir = getattr(sc, "config_dir", None)
+        # Longest host prefix first so nested mounts take precedence.
+        resolved_mounts: list[tuple[str, str]] = []
+        for host_decl, container_decl in (sc.volumes or {}).items():
+            try:
+                resolved = _resolve_host_path(host_decl, config_dir=config_dir)
+            except Exception:
+                continue
+            resolved_mounts.append((resolved, str(container_decl).rstrip("/") or "/"))
+        resolved_mounts.sort(key=lambda kv: len(kv[0]), reverse=True)
+        for host_root, container_root in resolved_mounts:
+            if not host_root:
+                continue
+            if hp_str == host_root:
+                return container_root or "/"
+            prefix = host_root.rstrip("/") + "/"
+            if hp_str.startswith(prefix):
+                rel = hp_str[len(prefix):]
+                if container_root in ("", "/"):
+                    return "/" + rel
+                return container_root + "/" + rel
+        return None
+
     def is_mounted_path(self, container_path: str) -> tuple[bool, str | None]:
         """Check whether ``container_path`` lives inside one of our bind mounts.
 
