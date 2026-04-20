@@ -164,6 +164,7 @@ session:
     # actions would fail with "file not found".
     volumes:
       "./evomaster": "/workspace/evomaster"
+      "./playground/minimal_skill_task": "/workspace/playground/minimal_skill_task" # better change to your abosolute path
     env_vars: {}
 
     auto_remove: true
