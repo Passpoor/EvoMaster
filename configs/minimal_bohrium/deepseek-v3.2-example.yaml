@@ -52,6 +52,7 @@ agents:
     max_turns: 50
     tools:  # General Agent requires all builtin tools
       builtin: ["*"]
+      bohrium: "bohrium"
       mcp: "mcp_config.json"
 
     skills:
