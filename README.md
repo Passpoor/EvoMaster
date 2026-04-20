@@ -222,7 +222,7 @@ python run.py --agent minimal --task task.txt
 ```
 
 ## 📋 Examples
-For details on Playground examples, please refer to [here](./playground/README.md).
+For details on Playground examples, please refer to [here](./playground/README.md). The examples below all run code in the local environment. EvoMaster also supports running code safely inside Docker — you only need a few extra lines of YAML. See [the Docker session guide](./docs/docker_session.md) for details.
 
 ### Single Agent (Minimal)
 ```bash

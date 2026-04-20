@@ -231,15 +231,21 @@ class SkillTool(BaseTool):
                 f"Available scripts: {available_scripts}",
                 {"error": "script_not_found"}
             )
-        # Convert to absolute path
+        # Convert to absolute host path, then translate to whatever path the
+        # session sees. For ``LocalSession`` this is an identity mapping; for
+        # ``DockerSession`` it walks the bind mounts to produce a path that
+        # exists inside the container. When the skill directory is not
+        # mounted, the call falls through to the raw host path so the agent
+        # gets a clear "file not found" error rather than a silent hang.
         script_path = script_path.resolve()
+        session_script_path = session.to_session_path(str(script_path))
         # Build command
         if script_path.suffix == '.py':
-            cmd = f"python {script_path}"
+            cmd = f"python {session_script_path}"
         elif script_path.suffix == '.sh':
-            cmd = f"bash {script_path}"
+            cmd = f"bash {session_script_path}"
         elif script_path.suffix == '.js':
-            cmd = f"node {script_path}"
+            cmd = f"node {session_script_path}"
         else:
             return (
                 f"Error: Unsupported script type: {script_path.suffix}",

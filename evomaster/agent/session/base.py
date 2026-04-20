@@ -170,6 +170,35 @@ class BaseSession(ABC):
         # Exact match to avoid false positives (e.g., "dir" in "not_dir")
         return stdout == "dir"
 
+    def to_session_path(self, host_path: str) -> str:
+        """Translate an absolute host path to the path visible inside the session.
+
+        The default implementation assumes the session sees the host file
+        system directly (``LocalSession`` etc.) and returns the input path
+        unchanged. Session types that isolate the filesystem — notably
+        :class:`DockerSession` — override this so callers can build commands
+        that reference files on the host without hard-coding knowledge of
+        the volume layout.
+
+        Args:
+            host_path: Absolute path on the host.
+
+        Returns:
+            The path that should be used inside the session to refer to the
+            same file. Falls back to ``host_path`` if no translation applies.
+        """
+        return host_path
+
+    def get_workspace_path(self) -> str | None:
+        """Return a per-thread workspace override, if the session has one.
+
+        Default implementation returns ``None`` (no override; callers should
+        fall back to ``self.config.workspace_path``). ``LocalSession``
+        overrides this to provide a per-thread workspace used by the
+        ``split_workspace_for_exp`` parallel mode.
+        """
+        return None
+
     def __enter__(self) -> BaseSession:
         """Context manager entry."""
         self.open()
