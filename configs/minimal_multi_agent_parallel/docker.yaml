@@ -7,8 +7,7 @@
 # Per-exp container behavior is controlled by `fresh_container_per_exp`
 # below. When true (the default in this file), each parallel exp spins up
 # its own brand-new Docker container that is auto-removed when the exp
-# finishes — exactly matching the requirement:
-#   "如果是并行，那么默认每次并行都新开 docker，运行完就删除这个 docker"
+# finishes
 
 # ============================================
 # LLM Configuration
@@ -20,7 +19,7 @@ llm:
     api_key: "${OPENAI_API_KEY}"
     base_url: "${GPT_BASE_URL}"
     temperature: 0.7
-    max_tokens: 16384
+    max_tokens: 163840
     timeout: 60
     max_retries: 3
     retry_delay: 1.0
@@ -47,14 +46,14 @@ llm:
     max_retries: 3
     retry_delay: 1.0
 
-  default: "local_sglang"
+  default: "openai"
 
 # ============================================
 # Multi-Agent Configuration
 # ============================================
 agents:
   planning:
-    llm: "local_sglang"
+    llm: "openai"
     max_turns: 10
     tools:
       builtin: []
@@ -67,7 +66,7 @@ agents:
     user_prompt_file: "prompts/planning_user_prompt.txt"
 
   coding:
-    llm: "local_sglang"
+    llm: "openai"
     max_turns: 50
     tools:
       builtin: ["*"]
@@ -86,7 +85,7 @@ session:
   type: "docker"
 
   docker:
-    image: "python:3.11"
+    image: "evomaster/base:bohrium"
 
     # Used as a *prefix* when fresh_container_per_exp=true (each exp gets
     # `<container_name>-exp-<i>`). Leave null for an auto-generated prefix.
@@ -95,12 +94,12 @@ session:
 
     working_dir: "/workspace"
 
-    memory_limit: "8g"
-    cpu_limit: 4.0
-    gpu_devices: null
-    network_mode: "bridge"
+    memory_limit: "48g"
+    cpu_limit: 36.0
+    gpu_devices: ["0", "1", "2"]
+    network_mode: "host"
 
-    volumes: {}
+    volumes: {"/data/xinyu/docker_images":"/workspace/docker_images"}
     env_vars: {}
 
     # When fresh_container_per_exp=true, the per-exp containers ALWAYS use

@@ -15,7 +15,7 @@ llm:
     api_key: "${OPENAI_API_KEY}"
     base_url: "${GPT_BASE_URL}"
     temperature: 0.7
-    max_tokens: 16384
+    max_tokens: 163840
     timeout: 60
     max_retries: 3
     retry_delay: 1.0
@@ -42,14 +42,14 @@ llm:
     max_retries: 3
     retry_delay: 1.0
 
-  default: "local_sglang"
+  default: "openai"
 
 # ============================================
 # Agent Configuration
 # ============================================
 agents:
   draft:
-    llm: "local_sglang"
+    llm: "openai"
     max_turns: 10
     tools:
       builtin: []
@@ -62,7 +62,7 @@ agents:
     user_prompt_file: "prompts/draft_user_prompt.txt"
 
   debug:
-    llm: "local_sglang"
+    llm: "openai"
     max_turns: 10
     tools:
       builtin: []
@@ -75,7 +75,7 @@ agents:
     user_prompt_file: "prompts/debug_user_prompt.txt"
 
   improve:
-    llm: "local_sglang"
+    llm: "openai"
     max_turns: 10
     tools:
       builtin: []
@@ -88,7 +88,7 @@ agents:
     user_prompt_file: "prompts/improve_user_prompt.txt"
 
   reseach:
-    llm: "local_sglang"
+    llm: "openai"
     max_turns: 10
     tools:
       builtin: []
@@ -101,7 +101,7 @@ agents:
     user_prompt_file: "prompts/reseach_user_prompt.txt"
 
   knowledge_promotion:
-    llm: "local_sglang"
+    llm: "openai"
     max_turns: 10
     tools:
       builtin: []
@@ -114,7 +114,7 @@ agents:
     user_prompt_file: "prompts/knowledge_promotion_user_prompt.txt"
 
   metric:
-    llm: "local_sglang"
+    llm: "openai"
     max_turns: 50
     tools:
       builtin: []
@@ -136,7 +136,7 @@ session:
     # Use a richer image (e.g. evomaster/base:latest) if you have one with
     # numpy / pandas / scikit-learn pre-installed; the agent will otherwise
     # need to `pip install` packages on first use.
-    image: "python:3.11"
+    image: "mlmaster-worker:latest "
 
     container_name: null
     use_existing_container: null
@@ -144,9 +144,9 @@ session:
     working_dir: "/workspace"
 
     memory_limit: "16g"
-    cpu_limit: 8.0
-    gpu_devices: null
-    network_mode: "bridge"
+    cpu_limit: 16.0
+    gpu_devices: ["0"]
+    network_mode: "host"
 
     # Mount the kaggle competition input data into the container at
     # /workspace/input — analogous to the local-mode `symlinks` entry.

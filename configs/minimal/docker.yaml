@@ -13,7 +13,7 @@ llm:
     api_key: "${OPENAI_API_KEY}"
     base_url: "${GPT_BASE_URL}"
     temperature: 0.7
-    max_tokens: 16384
+    max_tokens: 163840
     timeout: 60
     max_retries: 3
     retry_delay: 1.0
@@ -40,14 +40,14 @@ llm:
     max_retries: 3
     retry_delay: 1.0
 
-  default: "local_sglang"
+  default: "openai"
 
 # ============================================
 # Agent Configuration
 # ============================================
 agents:
   general:
-    llm: "local_sglang"
+    llm: "openai"
     max_turns: 50
     tools:
       builtin: ["*"]
@@ -71,7 +71,7 @@ session:
     # Image — must include bash. `python:3.11` is universally available on
     # Docker Hub; swap to your own image (e.g. `evomaster/base:latest`) for
     # a richer toolset.
-    image: "python:3.11"
+    image: "evomaster/base:bohrium"
 
     # When null we generate a unique name per run. Set this to a fixed name
     # if you want to reuse the same container across runs (then also set
@@ -87,15 +87,15 @@ session:
     working_dir: "/workspace"
 
     # Resource limits. Set to null / 0 to disable a particular limit.
-    memory_limit: "8g"
-    cpu_limit: 4.0
+    memory_limit: "16g"
+    cpu_limit: 16.0
 
     # GPU spec: null disables GPUs; "all", a single index ("0"), a comma list
     # ("0,1"), or a Python list (["0","1"]) selects them.
-    gpu_devices: null
+    gpu_devices: ["0","1"]
 
     # Network mode: "bridge" (default), "host", "none", or any user network.
-    network_mode: "bridge"
+    network_mode: "host"
 
     # Extra bind mounts {host_path: container_path}. Relative host paths are
     # auto-resolved against the project cwd. The agent's workspace is mounted
