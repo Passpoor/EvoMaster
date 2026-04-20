@@ -221,7 +221,7 @@ python run.py --agent minimal --task task.txt
 ```
 
 ## 📋 示例
-关于 Playground 示例的详情请参阅[这里](./playground/README_CN.md)。
+关于 Playground 示例的详情请参阅[这里](./playground/README_CN.md)。以下示例都使用本地环境运行代码。同时，EvoMaster 也支持在 Docker 中安全运行代码，仅需简单几步即可完成，请参阅[这里](./docs/zh/docker_session.md)了解更多。
 
 ### 单智能体（Minimal）
 ```bash

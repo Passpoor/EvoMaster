@@ -8,5 +8,6 @@
 | [Tools 模块](./zh/tools.md) | 工具系统和 MCP 集成 |
 | [Skills 模块](./zh/skills.md) | 技能系统接口 |
 | [LLM 模块](./zh/llm.md) | LLM 抽象层 |
+| [Docker Session 指南](./zh/docker_session.md) | 在 Docker 容器中运行 Playground |
 | [v0.0.2 版本更新说明与迁移指南](./release_notes/v0.1.0_zh.md) | v0.0.2 新增内容及从 v0.0.1 迁移方法 |
 | [v0.1.0 发布说明](./release_notes/v0.1.0_zh.md) | v0.1.0 新增 Playground、飞书智能助手、TypeScript Skill 支持等 |
