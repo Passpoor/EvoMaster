@@ -142,10 +142,14 @@ class _SDKRetryReasonFilter(logging.Filter):
     ``Retrying request ...`` line with no context and cannot tell whether
     it was a network timeout, a 5xx, a 429, etc.
 
-    This filter attaches itself to the SDK's ``_base_client`` logger, captures
-    the exception from the most recent ``Encountered`` record (per thread),
-    and appends a short summary to the next ``Retrying request`` message on
-    the same thread. The filter always returns True so nothing is dropped.
+    This filter attaches to the SDK's ``_base_client`` logger, captures the
+    exception from the most recent ``Encountered`` record (per thread), and
+    appends a short summary to the next ``Retrying request`` record on the
+    same thread. To make the ``Encountered`` record reachable we have to
+    raise the logger level to DEBUG — but we drop every DEBUG record here
+    after inspecting it so the console is not flooded with the SDK's normal
+    per-request chatter (``Request options``, ``Sending HTTP Request``,
+    ``HTTP Response``, ``request_id``, etc.).
     """
 
     def __init__(self) -> None:
@@ -163,15 +167,19 @@ class _SDKRetryReasonFilter(logging.Filter):
         try:
             msg = record.getMessage()
         except Exception:
-            return True
+            # Unknown record: if it's DEBUG, drop per our policy; else keep.
+            return record.levelno > logging.DEBUG
 
         if msg.startswith("Encountered "):
             exc_info = record.exc_info
             if exc_info and exc_info[1] is not None:
                 exc = exc_info[1]
                 exc_str = str(exc).strip()
+                summary = f"{type(exc).__module__}.{type(exc).__name__}"
+                # Trim the redundant "builtins." prefix for stdlib errors.
+                if summary.startswith("builtins."):
+                    summary = summary[len("builtins."):]
                 status = getattr(exc, "status_code", None)
-                summary = f"{type(exc).__name__}"
                 if status is not None:
                     summary += f" (status={status})"
                 if exc_str:
@@ -180,10 +188,11 @@ class _SDKRetryReasonFilter(logging.Filter):
             else:
                 # Fall back to the bare "Encountered <X>" string.
                 self._set_last_reason(msg)
-            return True
+            # Captured — drop so it doesn't show up in the console.
+            return False
 
         if msg.startswith("Retrying request to"):
-            reason = self._get_last_reason() or "unknown (set logging level DEBUG on the SDK logger for details)"
+            reason = self._get_last_reason() or "unknown"
             # Rewrite the record so the reason shows up wherever the original
             # line was going. Pre-render with the current args to keep
             # downstream formatting simple and avoid mutating args.
@@ -196,7 +205,10 @@ class _SDKRetryReasonFilter(logging.Filter):
             self._set_last_reason(None)
             return True
 
-        return True
+        # Everything else: suppress the SDK's DEBUG chatter (Request options,
+        # Sending HTTP Request, HTTP Response, request_id, ...), let INFO
+        # and above through unchanged.
+        return record.levelno > logging.DEBUG
 
 
 _SDK_RETRY_LOGGER_NAMES = (
@@ -210,10 +222,11 @@ _sdk_retry_filter_installed = False
 def _install_sdk_retry_reason_filter() -> None:
     """Attach :class:`_SDKRetryReasonFilter` to the OpenAI / Anthropic SDK loggers.
 
-    Sets each logger level to DEBUG so ``Encountered ...`` debug records reach
-    the filter (the records themselves still propagate to the root handlers,
-    which typically ignore them at INFO/WARN, so the console is not spammed).
-    Safe to call multiple times — the filter is only installed once.
+    We raise each logger's level to DEBUG so the ``Encountered ...`` record
+    survives the level gate and reaches the filter; the filter then drops
+    every DEBUG record itself so the extra chatter never reaches the root
+    handlers. Safe to call multiple times — the filter is only installed
+    once per logger.
     """
     global _sdk_retry_filter_installed
     if _sdk_retry_filter_installed:
@@ -222,11 +235,12 @@ def _install_sdk_retry_reason_filter() -> None:
     for name in _SDK_RETRY_LOGGER_NAMES:
         lg = logging.getLogger(name)
         # DEBUG so the "Encountered ..." record passes the logger-level gate
-        # and reaches our filter. Handlers further up still enforce their own
-        # level, so the extra debug records are not emitted to the console.
+        # and reaches our filter. The filter drops DEBUG records itself so
+        # this does not spam the console.
         if lg.level == logging.NOTSET or lg.level > logging.DEBUG:
             lg.setLevel(logging.DEBUG)
-        # Avoid double-installing if the module is re-imported.
+        # Filter has to run on the logger (not a handler) so it sees records
+        # before they propagate to root handlers.
         already = any(isinstance(f, _SDKRetryReasonFilter) for f in lg.filters)
         if not already:
             lg.addFilter(filt)
