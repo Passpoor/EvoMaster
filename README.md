@@ -15,7 +15,7 @@
 </p>
 <div align="center">
 
-**The Universal Infrastructure for Building Evolving Autonomous Scientific Research Agents.**
+**A Foundational Evolving Agent Framework for Agentic Science at Scale**
 
 *Accelerating the "AI for Science" revolution by making intelligent agent development accessible, modular, and powerful.*
 
