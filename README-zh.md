@@ -10,6 +10,7 @@
   <a href="#scimaster-series"><img src="https://img.shields.io/badge/SciMaster-6%2B智能体-059669?style=for-the-badge" alt="SciMaster"></a>
   <a href="#key-features"><img src="https://img.shields.io/badge/核心特性-4项-7c3aed?style=for-the-badge" alt="核心特性"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-ea580c?style=for-the-badge" alt="License"></a>
+  <a href="https://arxiv.org/abs/2604.17406"><img src="https://img.shields.io/badge/arXiv-2604.17406-b31b1b?style=for-the-badge&logo=arxiv&logoColor=white" alt="arXiv"></a>
   <a href="#contact-us"><img src="https://img.shields.io/badge/微信-加入社群-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat Group"></a>
 </p>
 <div align="center">
