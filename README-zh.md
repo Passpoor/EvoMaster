@@ -68,7 +68,7 @@ https://github.com/user-attachments/assets/a8fe00ba-531c-4d53-b7bd-1bbedf7a6442
 
 **[MagiClaw](https://github.com/sjtu-sai-agents/MagiClaw)** 是基于 EvoMaster 开发的飞书智能体助手。通过自然语言对话，它能帮你基于 EvoMaster 框架创建新智能体，或调度多个已有的智能体协作完成任务。
 
-## 性能亮点
+## 📊 性能亮点
 
 ![EvoMaster 与 OpenClaw 在四个基准上的性能对比](./assets/evomaster_vs_openclaw.png)
 

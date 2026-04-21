@@ -67,7 +67,7 @@ https://github.com/user-attachments/assets/a8fe00ba-531c-4d53-b7bd-1bbedf7a6442
 
 **[MagiClaw](https://github.com/sjtu-sai-agents/MagiClaw)** is a Feishu (Lark) intelligent assistant built on EvoMaster. Through natural language conversation, it can help you create new agents based on the EvoMaster framework, or orchestrate multiple existing agents to collaborate on tasks.
 
-## Performance Highlights
+## 📊 Performance Highlights
 
 ![Performance comparison between EvoMaster and OpenClaw across four benchmarks](./assets/evomaster_vs_openclaw.png)
 
