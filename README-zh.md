@@ -10,6 +10,7 @@
   <a href="#scimaster-series"><img src="https://img.shields.io/badge/SciMaster-6%2B智能体-059669?style=for-the-badge" alt="SciMaster"></a>
   <a href="#key-features"><img src="https://img.shields.io/badge/核心特性-4项-7c3aed?style=for-the-badge" alt="核心特性"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-ea580c?style=for-the-badge" alt="License"></a>
+  <a href="#contact-us"><img src="https://img.shields.io/badge/微信-加入社群-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat Group"></a>
 </p>
 <div align="center">
 
@@ -293,6 +294,18 @@ python run.py --agent browse_master --config configs/browse_master/config.yaml -
 
 ## 🤝 参与贡献
 欢迎为 EvoMaster 做出贡献！如果您有任何想法、bug 修复或新特性，欢迎提交 Pull Request。如果涉及较大的变更，请先提交 issue 与我们讨论您的改动方案。
+
+## <a id="contact-us"></a>💬 联系我们
+
+我们欢迎讨论，问题和反馈! 欢迎加入我们微信社群:
+
+<div align="center">
+
+<img src="https://github.com/user-attachments/assets/d4d75de7-cb49-4a7b-9d6e-59e60a5d45b7" width="250" alt="WeChat Group QR Code"/>
+
+*扫描二维码加入微信群*
+
+</div>
 
 ## ✍️ 引用
 
