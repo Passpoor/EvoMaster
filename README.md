@@ -294,6 +294,22 @@ python run.py --agent browse_master --config configs/browse_master/config.yaml -
 ## 🤝 Contributing
 We welcome contributions to EvoMaster! Feel free to make a pull request if you have any ideas, bug fixes, or new features. For major changes, please open an issue first to discuss your change proposal.
 
+## ✍️ Citation
+
+If you find our work helpful, please use the following citations.
+
+```bibtex
+@misc{zhu2026evomasterfoundationalagentframework,
+      title={EvoMaster: A Foundational Agent Framework for Building Evolving Autonomous Scientific Agents at Scale}, 
+      author={Xinyu Zhu and Yuzhu Cai and Zexi Liu and Cheng Wang and Fengyang Li and Wenkai Jin and Wanxu Liu and Zehao Bing and Bingyang Zheng and Jingyi Chai and Shuo Tang and Rui Ye and Yuwen Du and Xianghe Pang and Yaxin Du and Tingjia Miao and Yuzhi Zhang and Ruoxue Liao and Zhaohan Ding and Linfeng Zhang and Yanfeng Wang and Weinan E and Siheng Chen},
+      year={2026},
+      eprint={2604.17406},
+      archivePrefix={arXiv},
+      primaryClass={cs.AI},
+      url={https://arxiv.org/abs/2604.17406}, 
+}
+```
+
 ## ⭐ Star History
 If you find EvoMaster and MagiClaw helpful, please consider giving us a star! ⭐
 <a href="https://www.star-history.com/?repos=sjtu-sai-agents%2FEvoMaster&type=date&legend=top-left">
