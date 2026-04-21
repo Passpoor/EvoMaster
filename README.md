@@ -21,6 +21,10 @@
 
 *A complete closed loop of scientific workflows built with EvoMaster*
 
+<img src="./assets/evomaster_vs_openclaw.png" alt="Performance comparison between EvoMaster and OpenClaw across four benchmarks" width="88%" />
+
+*Across four authoritative benchmarks, EvoMaster outperforms OpenClaw by +159% to +316% under the same GPT-5.4 backend.*
+
 <table align="center" width="100%">
 <tr>
 <td width="33%" align="center" style="vertical-align: top; padding: 10px;">
@@ -66,12 +70,6 @@ https://github.com/user-attachments/assets/a8fe00ba-531c-4d53-b7bd-1bbedf7a6442
 **EvoMaster** is a lightweight yet powerful framework designed to enable researchers and developers to rapidly build their own scientific agents, free from the engineering burden of tool calling, skill composition, memory storage, and more.
 
 **[MagiClaw](https://github.com/sjtu-sai-agents/MagiClaw)** is a Feishu (Lark) intelligent assistant built on EvoMaster. Through natural language conversation, it can help you create new agents based on the EvoMaster framework, or orchestrate multiple existing agents to collaborate on tasks.
-
-## 📊 Performance Highlights
-
-![Performance comparison between EvoMaster and OpenClaw across four benchmarks](./assets/evomaster_vs_openclaw.png)
-
-Across four authoritative benchmarks, EvoMaster consistently outperforms OpenClaw by a large margin, with gains ranging from +159% to +316% under the same GPT-5.4 backend.
 
 ## <a id="key-features"></a>✨ Key Features
 

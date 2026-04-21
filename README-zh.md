@@ -21,6 +21,10 @@
 
 *基于EvoMaster实现的科研工作流的完整闭环*
 
+<img src="./assets/evomaster_vs_openclaw.png" alt="EvoMaster 与 OpenClaw 在四个基准上的性能对比" width="88%" />
+
+*在四个权威基准上，EvoMaster 在相同 GPT-5.4 后端下相较 OpenClaw 实现了 +159% 到 +316% 的显著提升。*
+
 <table align="center" width="100%">
 <tr>
 <td width="33%" align="center" style="vertical-align: top; padding: 10px;">
@@ -67,12 +71,6 @@ https://github.com/user-attachments/assets/a8fe00ba-531c-4d53-b7bd-1bbedf7a6442
 **EvoMaster** 是一个轻量级但功能强大的框架，专为研究人员和开发者设计，旨在助力大家快速构建属于自己的科学智能体（Scientific Agents），免受工具调用、技能组合、记忆存储等工程化工作的烦扰。
 
 **[MagiClaw](https://github.com/sjtu-sai-agents/MagiClaw)** 是基于 EvoMaster 开发的飞书智能体助手。通过自然语言对话，它能帮你基于 EvoMaster 框架创建新智能体，或调度多个已有的智能体协作完成任务。
-
-## 📊 性能亮点
-
-![EvoMaster 与 OpenClaw 在四个基准上的性能对比](./assets/evomaster_vs_openclaw.png)
-
-在四个权威基准上，EvoMaster 在相同 GPT-5.4 后端下均显著优于 OpenClaw，整体提升范围达到 +159% 至 +316%。
 
 ## <a id="key-features"></a>✨ 核心特性
 
