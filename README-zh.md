@@ -52,6 +52,8 @@ https://github.com/user-attachments/assets/a8fe00ba-531c-4d53-b7bd-1bbedf7a6442
 
 ## 📰 News
 
+**2026-04-19** EvoMaster 预印本版本正式发布！欢迎查看我们的 [arXiv 论文](https://arxiv.org/abs/2604.17406)。
+
 **2026-04-12** EvoMaster `v0.1.1` 发布！MagiClaw现已移至[独立仓库](https://github.com/sjtu-sai-agents/MagiClaw)。EvoMaster 现已支持以skill形式被调用！添加示例自定义工具。
 
 **2026-03-23** EvoMaster `v0.1.0` 发布！开源ML-Master 1.0，ML-Master 2.0，X-Master，Browse-Master 等智能体，支持[MagiClaw](https://github.com/sjtu-sai-agents/MagiClaw)：以飞书对话形式创建智能体，支持typescript形式skill。

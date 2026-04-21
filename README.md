@@ -51,6 +51,8 @@ https://github.com/user-attachments/assets/a8fe00ba-531c-4d53-b7bd-1bbedf7a6442
 
 ## 📰 News
 
+**2026-04-19** EvoMaster preprint version is released! Check out our [arXiv paper](https://arxiv.org/abs/2604.17406).
+
 **2026-04-12** EvoMaster `v0.1.1` is released! MagiClaw has now been moved to a [standalone repository](https://github.com/sjtu-sai-agents/MagiClaw). EvoMaster now supports being invoked as a skill and adds example custom tools.
 
 **2026-03-23** EvoMaster `v0.1.0` is released! We open-sourced ML-Master 1.0, ML-Master 2.0, X-Master, Browse-Master, and more, with support for [MagiClaw](https://github.com/sjtu-sai-agents/MagiClaw): create agents through Feishu conversations and use TypeScript-format skills.
