@@ -23,7 +23,7 @@
 
 <img src="./assets/evomaster_vs_openclaw.png" alt="Performance comparison between EvoMaster and OpenClaw across four benchmarks" width="88%" />
 
-*Across four authoritative benchmarks, EvoMaster outperforms OpenClaw by +159% to +316% under the same GPT-5.4 backend.*
+*EvoMaster outperforms the general-purpose agent OpenClaw across four authoritative benchmarks with GPT-5.4.*
 
 <table align="center" width="100%">
 <tr>

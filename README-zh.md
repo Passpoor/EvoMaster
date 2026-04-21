@@ -23,7 +23,7 @@
 
 <img src="./assets/evomaster_vs_openclaw.png" alt="EvoMaster 与 OpenClaw 在四个基准上的性能对比" width="88%" />
 
-*在四个权威基准上，EvoMaster 在相同 GPT-5.4 后端下相较 OpenClaw 实现了 +159% 到 +316% 的显著提升。*
+*在相同 GPT-5.4 后端下，EvoMaster 在四个权威基准上均优于通用智能体 OpenClaw。*
 
 <table align="center" width="100%">
 <tr>
