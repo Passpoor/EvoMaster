@@ -21,9 +21,21 @@
 
 *基于EvoMaster实现的科研工作流的完整闭环*
 
-<img src="./assets/evomaster_vs_openclaw.png" alt="EvoMaster 与 OpenClaw 在四个基准上的性能对比" width="88%" />
+<table align="center" width="100%">
+<tr>
+<td width="50%" align="center" valign="bottom" style="vertical-align: bottom; padding: 6px;">
+<img src="./assets/evomaster_vs_openclaw.png" alt="EvoMaster 与 OpenClaw 在四个基准上的性能对比" width="100%" />
+</td>
+<td width="50%" align="center" valign="bottom" style="vertical-align: bottom; padding: 6px;">
+<img src="./assets/EvoMaster_FSscore.png" alt="EvoMaster 在各基准上的 FS 分数" width="100%" />
+</td>
+</tr>
+<tr>
+<td width="50%" align="center"><em>EvoMaster 在四个权威基准上均优于通用智能体 OpenClaw（在相同 GPT-5.4 后端下）。</em></td>
+<td width="50%" align="center"><em>EvoMaster 在 OpenAI Frontier Science Benchmark 上取得突破。</em></td>
+</tr>
+</table>
 
-*在相同 GPT-5.4 后端下，EvoMaster 在四个权威基准上均优于通用智能体 OpenClaw。*
 
 <table align="center" width="100%">
 <tr>
