@@ -63,6 +63,10 @@ class AssistantMessage(BaseMessage):
     """Assistant message"""
     role: MessageRole = MessageRole.ASSISTANT
     tool_calls: list[ToolCall] | None = Field(default=None, description="List of tool calls")
+    reasoning_content: str | None = Field(
+        default=None,
+        description="DeepSeek thinking mode: prior-turn reasoning; must be echoed on the next API request",
+    )
 
 
 class ToolMessage(BaseMessage):
@@ -122,6 +126,8 @@ class Dialog(BaseModel):
                 msg_dict["content"] = content
             if isinstance(msg, AssistantMessage) and msg.tool_calls:
                 msg_dict["tool_calls"] = [tc.model_dump() for tc in msg.tool_calls]
+            if isinstance(msg, AssistantMessage) and msg.reasoning_content is not None:
+                msg_dict["reasoning_content"] = msg.reasoning_content
             if isinstance(msg, ToolMessage):
                 msg_dict["tool_call_id"] = msg.tool_call_id
                 msg_dict["name"] = msg.name

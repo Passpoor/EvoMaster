@@ -268,6 +268,10 @@ class LLMResponse(BaseModel):
     """LLM response."""
     content: str | None = Field(default=None, description="Generated text content")
     tool_calls: list[ToolCall] | None = Field(default=None, description="Tool call list")
+    reasoning_content: str | None = Field(
+        default=None,
+        description="DeepSeek thinking mode: echoed on the next multi-turn request",
+    )
     finish_reason: str | None = Field(default=None, description="Finish reason")
     usage: dict[str, int] = Field(default_factory=dict, description="Token usage statistics")
     meta: dict[str, Any] = Field(default_factory=dict, description="Other metadata")
@@ -281,6 +285,7 @@ class LLMResponse(BaseModel):
         return AssistantMessage(
             content=self.content,
             tool_calls=self.tool_calls,
+            reasoning_content=self.reasoning_content,
             meta={
                 "finish_reason": self.finish_reason,
                 "usage": self.usage,
@@ -801,9 +806,13 @@ class DeepSeekLLM(BaseLLM):
                 for tc in message.tool_calls
             ]
 
+        # DeepSeek thinking mode (separate_reasoning): SDK keeps extra fields on the message model
+        reasoning_content = getattr(message, "reasoning_content", None)
+
         return LLMResponse(
             content=message.content,
             tool_calls=tool_calls,
+            reasoning_content=reasoning_content,
             finish_reason=choice.finish_reason,
             usage={
                 "prompt_tokens": response.usage.prompt_tokens,

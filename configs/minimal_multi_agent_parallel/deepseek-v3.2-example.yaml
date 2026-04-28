@@ -27,6 +27,17 @@ llm:
     max_retries: 3
     retry_delay: 1.0
 
+  deepseek:
+    provider: "deepseek"
+    model: "deepseek-v4-pro"
+    api_key: "${DEEPSEEK_API_KEY}"
+    base_url: "https://api.deepseek.com"
+    temperature: 0.7
+    max_tokens: 16384
+    timeout: 60
+    max_retries: 3
+    retry_delay: 1.0
+
   # Local LLM configuration example
   local_sglang:
     provider: "deepseek"
