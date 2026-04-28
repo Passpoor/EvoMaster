@@ -33,7 +33,7 @@ llm:
   # Optional: DeepSeek, provide DEEPSEEK_API_KEY in .env
   deepseek:
     provider: "deepseek"
-    model: "deepseek-chat"
+    model: "deepseek-v4-pro"
     api_key: "${DEEPSEEK_API_KEY}"
     base_url: "https://api.deepseek.com"
     temperature: 0.7
