@@ -315,7 +315,7 @@ python run.py --agent browse_master --config configs/browse_master/config.yaml -
 
 <div align="center">
 
-<img src="https://github.com/user-attachments/assets/d4d75de7-cb49-4a7b-9d6e-59e60a5d45b7" width="250" alt="WeChat Group QR Code"/>
+<img src="https://github.com/user-attachments/assets/4754717a-4712-4d8d-9d00-7e38b19a4ca2" width="250" alt="WeChat Group QR Code"/>
 
 *扫描二维码加入微信群*
 
