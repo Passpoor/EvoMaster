@@ -19,8 +19,6 @@
 
 *Accelerating the "AI for Science" revolution by making intelligent agent development accessible, modular, and powerful.*
 
-*A complete closed loop of scientific workflows built with EvoMaster*
-
 <p align="center">
   <img src="./assets/evomaster_vs_openclaw.png" alt="Performance comparison between EvoMaster and OpenClaw across four benchmarks" width="88%" /><br>
   <em>EvoMaster outperforms the general-purpose agent OpenClaw across four authoritative benchmarks with GPT-5.4.</em>
@@ -32,6 +30,9 @@
 </p>
 
 
+
+
+*A complete closed loop of scientific workflows built with EvoMaster*
 
 <table align="center" width="100%">
 <tr>

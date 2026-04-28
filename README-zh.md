@@ -19,8 +19,6 @@
 
 *让科学智能体开发更简单、模块化且功能强大，加速"AI for Science"的变革进程。*
 
-*基于EvoMaster实现的科研工作流的完整闭环*
-
 <p align="center">
   <img src="./assets/evomaster_vs_openclaw.png" alt="EvoMaster 与 OpenClaw 在四个基准上的性能对比" width="88%" /><br>
   <em>EvoMaster 在四个权威基准上均优于通用智能体 OpenClaw（在相同 GPT-5.4 后端下）。</em>
@@ -31,6 +29,8 @@
   <em>EvoMaster 在 OpenAI Frontier Science Benchmark 上取得突破。</em>
 </p>
 
+
+*基于EvoMaster实现的科研工作流的完整闭环*
 
 <table align="center" width="100%">
 <tr>
