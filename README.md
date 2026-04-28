@@ -29,7 +29,7 @@
 </td>
 </tr>
 <tr>
-<td align="center" style="padding: 6px;">
+<td align="center" style="padding: 0;">
 <img src="./assets/EvoMaster_FSscore.png" alt="EvoMaster FS score across benchmarks" width="88%" /><br>
 <em>EvoMaster achieves a breakthrough on the OpenAI Frontier Science Benchmark.</em>
 </td>
