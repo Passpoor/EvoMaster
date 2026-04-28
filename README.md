@@ -21,20 +21,15 @@
 
 *A complete closed loop of scientific workflows built with EvoMaster*
 
-<table align="center" width="100%">
-<tr>
-<td align="center" style="padding: 6px;">
-<img src="./assets/evomaster_vs_openclaw.png" alt="Performance comparison between EvoMaster and OpenClaw across four benchmarks" width="88%" /><br>
-<em>EvoMaster outperforms the general-purpose agent OpenClaw across four authoritative benchmarks with GPT-5.4.</em>
-</td>
-</tr>
-<tr>
-<td align="center" style="padding: 0;">
-<img src="./assets/EvoMaster_FSscore.png" alt="EvoMaster FS score across benchmarks" width="88%" /><br>
-<em>EvoMaster achieves a breakthrough on the OpenAI Frontier Science Benchmark.</em>
-</td>
-</tr>
-</table>
+<p align="center">
+  <img src="./assets/evomaster_vs_openclaw.png" alt="Performance comparison between EvoMaster and OpenClaw across four benchmarks" width="88%" /><br>
+  <em>EvoMaster outperforms the general-purpose agent OpenClaw across four authoritative benchmarks with GPT-5.4.</em>
+</p>
+
+<p align="center">
+  <img src="./assets/EvoMaster_FSscore.png" alt="EvoMaster FS score across benchmarks" width="88%" /><br>
+  <em>EvoMaster achieves a breakthrough on the OpenAI Frontier Science Benchmark.</em>
+</p>
 
 
 
