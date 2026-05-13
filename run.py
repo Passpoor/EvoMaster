@@ -11,13 +11,14 @@ Arguments:
   --config: Specify the config file path (optional, defaults to configs/{agent}/config.yaml)
   --task: Task description (optional, enters interactive input if not provided)
   --interactive: Interactive mode (optional)
-  --run-dir: Specify the run directory (optional, auto-creates runs/{agent}_{timestamp}/ by default)
+  --run-dir: Specify the run directory (optional, prompts for project name and creates runs/{project_name}_{timestamp}/ by default)
 """
 
 import argparse
 import logging
 import sys
 import importlib
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -47,6 +48,9 @@ Examples:
 
   # Specify a run directory
   python run.py --agent minimal --task "analyze data" --run-dir runs/my_experiment
+
+  # Specify a project name for the run directory
+  python run.py --agent minimal --task "analyze data" --run-name my_experiment
 
   # Batch tasks (sequential)
   python run.py --agent minimal --task-file tasks.json
@@ -85,7 +89,12 @@ Examples:
 
     parser.add_argument(
         "--run-dir",
-        help="Specify run directory (default: auto-creates runs/{agent}_{timestamp}/)"
+        help="Specify run directory (default: prompts for project name and creates runs/{project_name}_{timestamp}/)"
+    )
+
+    parser.add_argument(
+        "--run-name",
+        help="Project name used in the run directory name when --run-dir is not specified"
     )
 
     parser.add_argument(
@@ -112,6 +121,25 @@ def setup_logging():
 
     # Suppress httpx INFO-level logs (keep WARNING and above only)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+def sanitize_run_name(name: str) -> str:
+    """Sanitize project/run name for filesystem-safe directory creation."""
+    name = name.strip()
+    name = re.sub(r'[\\/:*?"<>|]+', "_", name)
+    name = re.sub(r"\s+", "_", name)
+    name = re.sub(r"_+", "_", name).strip("._")
+    return name
+
+
+def prompt_run_name() -> str:
+    """Force the user to provide a non-empty project name."""
+    while True:
+        raw = input("Please enter the project name: ").strip()
+        run_name = sanitize_run_name(raw)
+        if run_name:
+            return run_name
+        print("Project name cannot be empty. Please try again.")
 
 
 def get_task_description(args):
@@ -413,8 +441,11 @@ def main():
     if args.run_dir:
         run_dir = Path(args.run_dir)
     else:
+        run_name = sanitize_run_name(args.run_name) if args.run_name else ""
+        if not run_name:
+            run_name = prompt_run_name()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = project_root / "runs" / f"{args.agent}_{timestamp}"
+        run_dir = project_root / "runs" / f"{run_name}_{timestamp}"
 
     # 3. Validate image files (if provided)
     images = None
